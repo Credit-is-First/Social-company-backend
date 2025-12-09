@@ -1,16 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsNotEmpty, IsDateString } from 'class-validator';
+import { IsUUID, IsNotEmpty, IsDateString } from 'class-validator';
 
 export class CreateLoanDto {
   @ApiProperty()
-  @IsInt()
+  @IsUUID('4')
   @IsNotEmpty()
-  bookId: number;
+  bookId: string;
 
   @ApiProperty()
-  @IsInt()
+  @IsUUID('4')
   @IsNotEmpty()
-  userId: number;
+  userId: string;
 
   @ApiProperty()
   @IsDateString()

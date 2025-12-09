@@ -1,9 +1,12 @@
 import { Entity, Column, PrimaryGeneratedColumn, OneToMany, ManyToMany, JoinTable } from 'typeorm';
 import { Loan } from '../../loans/entities/loan.entity';
 import { Role } from '../../roles/entities/role.entity';
+import { Group } from '../../groups/entities/group.entity';
 import { ApiProperty } from '@nestjs/swagger';
 
-// Keep enum for backward compatibility and default role assignment
+// @deprecated This enum is kept for backward compatibility only.
+// The system now uses role groups and function-based permissions instead of fixed roles.
+// Roles should be created dynamically with specific permissions assigned.
 export enum UserRole {
   ADMIN = 'admin',
   LIBRARIAN = 'librarian',
@@ -13,8 +16,8 @@ export enum UserRole {
 @Entity('users')
 export class User {
   @ApiProperty()
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
   @ApiProperty()
   @Column()
@@ -44,6 +47,10 @@ export class User {
   @Column({ type: 'text', nullable: true })
   securityAnswer: string;
 
+  @ApiProperty({ required: false })
+  @Column({ default: false })
+  blocked: boolean;
+
   @ManyToMany(() => Role, role => role.users, { eager: true })
   @JoinTable({
     name: 'user_roles',
@@ -51,6 +58,14 @@ export class User {
     inverseJoinColumn: { name: 'roleId', referencedColumnName: 'id' },
   })
   roles: Role[];
+
+  @ManyToMany(() => Group, group => group.users, { eager: true })
+  @JoinTable({
+    name: 'user_groups',
+    joinColumn: { name: 'userId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'groupId', referencedColumnName: 'id' },
+  })
+  groups: Group[];
 
   @OneToMany(() => Loan, loan => loan.user)
   loans: Loan[];
@@ -63,14 +78,42 @@ export class User {
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
   updatedAt: Date;
 
-  // Helper method to check if user has a role
+  // Helper method to check if user has a role (direct or from groups)
   hasRole(roleName: string): boolean {
-    return this.roles?.some(role => role.name === roleName) || false;
+    // Check direct roles
+    if (this.roles?.some(role => role.name === roleName)) {
+      return true;
+    }
+    // Check roles from groups
+    if (this.groups) {
+      for (const group of this.groups) {
+        if (group.roles?.some(role => role.name === roleName)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
-  // Helper method to get role names array
-  getRoleNames(): string[] {
-    return this.roles?.map(role => role.name) || [];
+  // Helper method to get all role names (direct + from groups)
+  getAllRoleNames(): string[] {
+    const roleNames = new Set<string>();
+    
+    // Add direct roles
+    if (this.roles) {
+      this.roles.forEach(role => roleNames.add(role.name));
+    }
+    
+    // Add roles from groups
+    if (this.groups) {
+      this.groups.forEach(group => {
+        if (group.roles) {
+          group.roles.forEach(role => roleNames.add(role.name));
+        }
+      });
+    }
+    
+    return Array.from(roleNames);
   }
 }
 

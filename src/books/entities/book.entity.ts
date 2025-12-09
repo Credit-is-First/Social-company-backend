@@ -5,8 +5,8 @@ import { ApiProperty } from '@nestjs/swagger';
 @Entity('books')
 export class Book {
   @ApiProperty()
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
   @ApiProperty()
   @Column()
@@ -53,8 +53,8 @@ export class Book {
   isApproved: boolean;
 
   @ApiProperty({ required: false })
-  @Column({ type: 'int', nullable: true })
-  approvedBy: number;
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  approvedBy: string;
 
   @ApiProperty({ required: false })
   @Column({ type: 'timestamp', nullable: true })

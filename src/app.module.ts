@@ -6,10 +6,12 @@ import { UsersModule } from './users/users.module';
 import { LoansModule } from './loans/loans.module';
 import { AuthModule } from './auth/auth.module';
 import { RolesModule } from './roles/roles.module';
+import { GroupsModule } from './groups/groups.module';
 import { Book } from './books/entities/book.entity';
 import { User } from './users/entities/user.entity';
 import { Loan } from './loans/entities/loan.entity';
 import { Role } from './roles/entities/role.entity';
+import { Group } from './groups/entities/group.entity';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './auth/guards/roles.guard';
 
@@ -22,11 +24,12 @@ import { RolesGuard } from './auth/guards/roles.guard';
       username: 'root',
       password: '',
       database: 'library_db',
-      entities: [Book, User, Loan, Role],
+      entities: [Book, User, Loan, Role, Group],
       synchronize: true, // Set to false in production
       logging: true,
     }),
     AuthModule,
+    GroupsModule,
     RolesModule,
     BooksModule,
     UsersModule,

@@ -60,9 +60,17 @@ export class BooksService {
     return savedBook as Book;
   }
 
-  async approve(id: number, userId: number): Promise<Book> {
+  async approve(id: string, userId: string): Promise<Book> {
     const book = await this.findOne(id);
     book.isApproved = true;
+    book.approvedBy = userId;
+    book.approvedAt = new Date();
+    return await this.booksRepository.save(book);
+  }
+
+  async decline(id: string, userId: string): Promise<Book> {
+    const book = await this.findOne(id);
+    book.isApproved = false;
     book.approvedBy = userId;
     book.approvedAt = new Date();
     return await this.booksRepository.save(book);
@@ -74,8 +82,9 @@ export class BooksService {
     });
   }
 
-  async findOne(id: number): Promise<Book> {
-    const book = await this.booksRepository.findOne(id, {
+  async findOne(id: string): Promise<Book> {
+    const book = await this.booksRepository.findOne({
+      where: { id },
       relations: ['loans'],
     });
     if (!book) {
@@ -84,7 +93,7 @@ export class BooksService {
     return book;
   }
 
-  async update(id: number, updateBookDto: UpdateBookDto, file?: Express.Multer.File): Promise<Book> {
+  async update(id: string, updateBookDto: UpdateBookDto, file?: Express.Multer.File): Promise<Book> {
     const book = await this.findOne(id);
     
     if (updateBookDto.totalCopies !== undefined) {
@@ -135,7 +144,7 @@ export class BooksService {
     return savedBook as Book;
   }
 
-  async remove(id: number): Promise<void> {
+  async remove(id: string): Promise<void> {
     const book = await this.findOne(id);
     await this.booksRepository.remove(book);
   }

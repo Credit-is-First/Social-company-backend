@@ -1,13 +1,13 @@
 import { PartialType } from '@nestjs/swagger';
-import { IsArray, IsNumber, IsOptional } from 'class-validator';
+import { IsArray, IsUUID, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { CreateUserDto } from './create-user.dto';
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {
-  @ApiProperty({ type: [Number], required: false })
+  @ApiProperty({ type: [String], required: false })
   @IsArray()
-  @IsNumber({}, { each: true })
+  @IsUUID('4', { each: true })
   @IsOptional()
-  roleIds?: number[];
+  roleIds?: string[];
 }
 

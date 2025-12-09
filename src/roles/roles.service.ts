@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Role } from './entities/role.entity';
+import { ROLE_DEFINITIONS } from './roles.constants';
 
 @Injectable()
 export class RolesService {
@@ -16,8 +17,8 @@ export class RolesService {
     });
   }
 
-  async findOne(id: number): Promise<Role> {
-    const role = await this.rolesRepository.findOne(id);
+  async findOne(id: string): Promise<Role> {
+    const role = await this.rolesRepository.findOne({ where: { id } });
     if (!role) {
       throw new NotFoundException(`Role with ID ${id} not found`);
     }
@@ -25,25 +26,62 @@ export class RolesService {
   }
 
   async findByName(name: string): Promise<Role | undefined> {
-    return await this.rolesRepository.findOne({ where: { name } });
+    return await this.rolesRepository.findOne({
+      where: { name },
+    });
   }
 
-  async create(name: string, description?: string): Promise<Role> {
-    const role = this.rolesRepository.create({ name, description });
+  async create(
+    name: string,
+    description?: string,
+  ): Promise<Role> {
+    const existingRole = await this.findByName(name);
+    if (existingRole) {
+      throw new BadRequestException(`Role with name ${name} already exists`);
+    }
+
+    const role = this.rolesRepository.create({
+      name,
+      description,
+    });
+
     return await this.rolesRepository.save(role);
   }
 
-  async ensureRolesExist(): Promise<void> {
-    const defaultRoles = [
-      { name: 'admin', description: 'Administrator with full access' },
-      { name: 'librarian', description: 'Librarian who can manage books and loans' },
-      { name: 'user', description: 'Regular user who can borrow books' },
-    ];
+  async update(
+    id: string,
+    updateData: {
+      name?: string;
+      description?: string;
+    },
+  ): Promise<Role> {
+    const role = await this.findOne(id);
 
-    for (const roleData of defaultRoles) {
-      const existingRole = await this.findByName(roleData.name);
+    if (updateData.name !== undefined) {
+      const existingRole = await this.findByName(updateData.name);
+      if (existingRole && existingRole.id !== id) {
+        throw new BadRequestException(`Role with name ${updateData.name} already exists`);
+      }
+      role.name = updateData.name;
+    }
+
+    if (updateData.description !== undefined) {
+      role.description = updateData.description;
+    }
+
+    return await this.rolesRepository.save(role);
+  }
+
+  async delete(id: string): Promise<void> {
+    const role = await this.findOne(id);
+    await this.rolesRepository.remove(role);
+  }
+
+  async ensureRolesExist(): Promise<void> {
+    for (const roleDef of ROLE_DEFINITIONS) {
+      const existingRole = await this.findByName(roleDef.name);
       if (!existingRole) {
-        await this.create(roleData.name, roleData.description);
+        await this.create(roleDef.name, roleDef.description);
       }
     }
   }

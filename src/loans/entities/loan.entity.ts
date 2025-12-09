@@ -4,24 +4,26 @@ import { User } from '../../users/entities/user.entity';
 import { ApiProperty } from '@nestjs/swagger';
 
 export enum LoanStatus {
+  PENDING = 'pending',
   ACTIVE = 'active',
   RETURNED = 'returned',
   OVERDUE = 'overdue',
+  DECLINED = 'declined',
 }
 
 @Entity('loans')
 export class Loan {
   @ApiProperty()
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
   @ApiProperty()
-  @Column()
-  bookId: number;
+  @Column({ type: 'varchar', length: 36 })
+  bookId: string;
 
   @ApiProperty()
-  @Column()
-  userId: number;
+  @Column({ type: 'varchar', length: 36 })
+  userId: string;
 
   @ApiProperty()
   @Column({ type: 'date' })
@@ -39,7 +41,7 @@ export class Loan {
   @Column({
     type: 'enum',
     enum: LoanStatus,
-    default: LoanStatus.ACTIVE,
+    default: LoanStatus.PENDING,
   })
   status: LoanStatus;
 

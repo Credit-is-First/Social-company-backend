@@ -3,7 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { User, UserRole } from '../users/entities/user.entity';
+import { User } from '../users/entities/user.entity';
+import { GroupsService } from '../groups/groups.service';
 import { RolesService } from '../roles/roles.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -16,27 +17,36 @@ export class AuthService {
     @InjectRepository(User)
     private usersRepository: Repository<User>,
     private jwtService: JwtService,
+    private groupsService: GroupsService,
     private rolesService: RolesService,
   ) {}
 
-  async register(registerDto: RegisterDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getRoleNames'>; access_token: string }> {
+  async register(registerDto: RegisterDto): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>> {
     const existingUser = await this.usersRepository.findOne({ where: { email: registerDto.email } });
     if (existingUser) {
       throw new BadRequestException('Email already exists');
     }
 
-    // Ensure default roles exist
-    await this.rolesService.ensureRolesExist();
+    // Ensure default groups exist
+    await this.groupsService.ensureDefaultGroupsExist();
 
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
     const hashedAnswer = await bcrypt.hash(registerDto.securityAnswer.toLowerCase(), 10);
 
-    // Get default role or specified role
-    const roleName = registerDto.role || UserRole.USER;
-    const defaultRole = await this.rolesService.findByName(roleName);
-    if (!defaultRole) {
-      throw new BadRequestException(`Role ${roleName} not found`);
+    // Check if this is the first user (setup) - assign super admin group
+    const userCount = await this.usersRepository.count();
+    const isFirstUser = userCount === 0;
+
+    let group = null;
+    if (isFirstUser) {
+      // Assign super admin group to first user (setup)
+      group = await this.groupsService.findByName('Super Admin');
+      if (!group) {
+        throw new BadRequestException('Super Admin group not found. Please ensure default groups are initialized.');
+      }
     }
+    // For subsequent users, they will be created without groups
+    // Groups and roles can be assigned later by administrators
 
     const user = this.usersRepository.create({
       name: registerDto.name,
@@ -45,33 +55,28 @@ export class AuthService {
       address: registerDto.address,
       password: hashedPassword,
       securityAnswer: hashedAnswer,
-      roles: [defaultRole],
+      groups: group ? [group] : [],
+      roles: [],
       securityQuestion: registerDto.securityQuestion,
     });
 
     const savedUser = await this.usersRepository.save(user);
     const { password, securityAnswer, ...userWithoutSensitive } = savedUser;
 
-    // Load roles for JWT payload
-    const userWithRoles = await this.usersRepository.findOne(savedUser.id, { relations: ['roles'] });
-    const roleNames = userWithRoles?.roles?.map(r => r.name) || [];
-
-    const payload = { email: user.email, sub: user.id, roles: roleNames };
-    const access_token = this.jwtService.sign(payload);
-
-    return {
-      user: userWithoutSensitive,
-      access_token,
-    };
+    return userWithoutSensitive;
   }
 
-  async login(loginDto: LoginDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getRoleNames'>; access_token: string }> {
+  async login(loginDto: LoginDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>; access_token: string }> {
     const user = await this.usersRepository.findOne({ 
       where: { email: loginDto.email },
-      relations: ['roles']
+      relations: ['groups', 'groups.roles', 'roles']
     });
     if (!user || !user.password) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (user.blocked) {
+      throw new UnauthorizedException('Your account has been blocked. Please contact an administrator.');
     }
 
     const isPasswordValid = await bcrypt.compare(loginDto.password, user.password);
@@ -80,9 +85,16 @@ export class AuthService {
     }
 
     const { password, securityAnswer, ...userWithoutSensitive } = user;
-    const roleNames = user.roles?.map(r => r.name) || [];
+    const groupNames = user.groups?.map(g => g.name) || [];
+    // Get all role names (direct roles + roles from groups)
+    const directRoleNames = user.roles?.map(r => r.name) || [];
+    const groupRoleNames = (user.groups || []).reduce<string[]>((acc, g) => {
+      const roleNames = g.roles?.map(r => r.name) || [];
+      return acc.concat(roleNames);
+    }, []);
+    const roleNames = [...new Set([...directRoleNames, ...groupRoleNames])];
 
-    const payload = { email: user.email, sub: user.id, roles: roleNames };
+    const payload = { email: user.email, sub: user.id, roles: roleNames, groups: groupNames };
     const access_token = this.jwtService.sign(payload);
 
     return {
@@ -117,7 +129,7 @@ export class AuthService {
     return { message: 'Password reset successfully' };
   }
 
-  async changePassword(userId: number, changePasswordDto: ChangePasswordDto): Promise<{ message: string }> {
+  async changePassword(userId: string, changePasswordDto: ChangePasswordDto): Promise<{ message: string }> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user || !user.password) {
       throw new NotFoundException('User not found');
@@ -135,7 +147,7 @@ export class AuthService {
     return { message: 'Password changed successfully' };
   }
 
-  async updateProfile(userId: number, updateData: { name?: string; phone?: string; address?: string }): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getRoleNames'>> {
+  async updateProfile(userId: string, updateData: { name?: string; phone?: string; address?: string }): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>> {
     const user = await this.usersRepository.findOne({ 
       where: { id: userId },
       relations: ['roles']
@@ -153,15 +165,56 @@ export class AuthService {
     return userWithoutSensitive;
   }
 
-  async validateUser(userId: number): Promise<User> {
+  async validateUser(userId: string): Promise<User> {
     const user = await this.usersRepository.findOne({ 
       where: { id: userId },
-      relations: ['roles']
+      relations: ['groups', 'groups.roles', 'roles']
     });
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+    if (user.blocked) {
+      throw new UnauthorizedException('Your account has been blocked. Please contact an administrator.');
+    }
     return user;
+  }
+
+  async setupSuperAdmin(registerDto: RegisterDto): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>> {
+    // Check if setup is already complete
+    const userCount = await this.usersRepository.count();
+    if (userCount > 0) {
+      throw new BadRequestException('Setup already completed. Super admin account already exists.');
+    }
+
+    // Ensure default groups and roles exist
+    await this.groupsService.ensureDefaultGroupsExist();
+    await this.rolesService.ensureRolesExist();
+
+    const hashedPassword = await bcrypt.hash(registerDto.password, 10);
+    const hashedAnswer = await bcrypt.hash(registerDto.securityAnswer.toLowerCase(), 10);
+
+    // Get Super Admin group
+    const superAdminGroup = await this.groupsService.findByName('Super Admin');
+    if (!superAdminGroup) {
+      throw new BadRequestException('Super Admin group not found. Please ensure default groups are initialized.');
+    }
+
+    const user = this.usersRepository.create({
+      name: registerDto.name,
+      email: registerDto.email,
+      phone: registerDto.phone,
+      address: registerDto.address,
+      password: hashedPassword,
+      securityAnswer: hashedAnswer,
+      groups: [superAdminGroup],
+      roles: [],
+      securityQuestion: registerDto.securityQuestion,
+    });
+
+    const savedUser = await this.usersRepository.save(user);
+    const { password, securityAnswer, ...userWithoutSensitive } = savedUser;
+
+    return userWithoutSensitive;
   }
 }
 

@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { User } from './entities/user.entity';
 import { RolesService } from '../roles/roles.service';
+import { GroupsService } from '../groups/groups.service';
 
 @Injectable()
 export class UsersService {
@@ -12,27 +14,20 @@ export class UsersService {
     @InjectRepository(User)
     private usersRepository: Repository<User>,
     private rolesService: RolesService,
+    private groupsService: GroupsService,
   ) {}
 
   async create(createUserDto: CreateUserDto): Promise<User> {
-    // Ensure default roles exist
-    await this.rolesService.ensureRolesExist();
-    
     const user = this.usersRepository.create(createUserDto);
     
-    // Assign default role if specified, otherwise assign 'user' role
-    if (createUserDto.role) {
-      const role = await this.rolesService.findByName(createUserDto.role);
-      if (role) {
-        user.roles = [role];
-      } else {
-        // Fallback to 'user' role if specified role not found
-        const defaultRole = await this.rolesService.findByName('user');
-        user.roles = defaultRole ? [defaultRole] : [];
-      }
+    // Assign roles if specified
+    if (createUserDto.roleIds && Array.isArray(createUserDto.roleIds) && createUserDto.roleIds.length > 0) {
+      const roles = await Promise.all(
+        createUserDto.roleIds.map(roleId => this.rolesService.findOne(roleId))
+      );
+      user.roles = roles.filter(r => r !== undefined);
     } else {
-      const defaultRole = await this.rolesService.findByName('user');
-      user.roles = defaultRole ? [defaultRole] : [];
+      user.roles = [];
     }
     
     return await this.usersRepository.save(user);
@@ -40,14 +35,15 @@ export class UsersService {
 
   async findAll(): Promise<User[]> {
     return await this.usersRepository.find({
-      relations: ['roles'],
+      relations: ['roles', 'groups', 'groups.roles'],
       order: { createdAt: 'DESC' },
     });
   }
 
-  async findOne(id: number): Promise<User> {
-    const user = await this.usersRepository.findOne(id, {
-      relations: ['loans', 'roles'],
+  async findOne(id: string): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { id },
+      relations: ['loans', 'roles', 'groups', 'groups.roles'],
     });
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
@@ -55,7 +51,7 @@ export class UsersService {
     return user;
   }
 
-  async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
+  async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
     const user = await this.findOne(id);
     
     // Handle role updates
@@ -71,7 +67,7 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async updateUserRoles(userId: number, roleIds: number[]): Promise<User> {
+  async updateUserRoles(userId: string, roleIds: string[]): Promise<User> {
     const user = await this.findOne(userId);
     const roles = await Promise.all(
       roleIds.map(roleId => this.rolesService.findOne(roleId))
@@ -80,7 +76,33 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async remove(id: number): Promise<void> {
+  async updateUserGroups(userId: string, groupIds: string[]): Promise<User> {
+    const user = await this.findOne(userId);
+    const groups = await Promise.all(
+      groupIds.map(groupId => this.groupsService.findOne(groupId))
+    );
+    
+    // Check if trying to assign Super Admin group
+    const superAdminGroup = groups.find(g => g.name === 'Super Admin');
+    if (superAdminGroup) {
+      // Check if any other user already has Super Admin group
+      const existingSuperAdmin = await this.usersRepository
+        .createQueryBuilder('user')
+        .innerJoin('user.groups', 'group')
+        .where('group.name = :groupName', { groupName: 'Super Admin' })
+        .andWhere('user.id != :userId', { userId })
+        .getOne();
+      
+      if (existingSuperAdmin) {
+        throw new BadRequestException('Super Admin group can only have one member');
+      }
+    }
+    
+    user.groups = groups;
+    return await this.usersRepository.save(user);
+  }
+
+  async remove(id: string): Promise<void> {
     const user = await this.findOne(id);
     await this.usersRepository.remove(user);
   }
@@ -89,6 +111,8 @@ export class UsersService {
     return await this.usersRepository
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.roles', 'roles')
+      .leftJoinAndSelect('user.groups', 'groups')
+      .leftJoinAndSelect('groups.roles', 'groupRoles')
       .where('user.name LIKE :query', { query: `%${query}%` })
       .orWhere('user.email LIKE :query', { query: `%${query}%` })
       .orWhere('user.phone LIKE :query', { query: `%${query}%` })
@@ -99,5 +123,17 @@ export class UsersService {
   async count(): Promise<number> {
     return await this.usersRepository.count();
   }
-}
 
+  async blockUser(userId: string, blocked: boolean): Promise<User> {
+    const user = await this.findOne(userId);
+    user.blocked = blocked;
+    return await this.usersRepository.save(user);
+  }
+
+  async resetUserPassword(userId: string, newPassword: string): Promise<User> {
+    const user = await this.findOne(userId);
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    return await this.usersRepository.save(user);
+  }
+}

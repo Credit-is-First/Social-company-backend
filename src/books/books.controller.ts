@@ -6,8 +6,9 @@ import { CreateBookDto } from './dto/create-book.dto';
 import { UpdateBookDto } from './dto/update-book.dto';
 import { Book } from './entities/book.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { HasRoles } from '../auth/decorators/roles.decorator';
+import { Roles } from '../roles/roles.constants';
 import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
@@ -21,7 +22,7 @@ export class BooksController {
   constructor(private readonly booksService: BooksService) {}
 
   @Post()
-  @Roles('admin', 'librarian', 'user') // Users can add books, but they need approval
+  @HasRoles(Roles.BOOK_CREATE)
   @UseInterceptors(FileInterceptor('file', {
     storage: memoryStorage(), // Use memory storage to validate before saving to disk
     fileFilter: (req, file, cb) => {
@@ -79,19 +80,27 @@ export class BooksController {
   @ApiResponse({ status: 200, description: 'Book found', type: Book })
   @ApiResponse({ status: 404, description: 'Book not found' })
   findOne(@Param('id') id: string) {
-    return this.booksService.findOne(+id);
+    return this.booksService.findOne(id);
   }
 
   @Patch(':id/approve')
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Approve a book (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_APPROVE)
+  @ApiOperation({ summary: 'Approve a book' })
   @ApiResponse({ status: 200, description: 'Book approved successfully', type: Book })
   approve(@Param('id') id: string, @CurrentUser() user: User) {
-    return this.booksService.approve(+id, user.id);
+    return this.booksService.approve(id, user.id);
+  }
+
+  @Patch(':id/decline')
+  @HasRoles(Roles.BOOK_DECLINE)
+  @ApiOperation({ summary: 'Decline a book' })
+  @ApiResponse({ status: 200, description: 'Book declined successfully', type: Book })
+  decline(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.booksService.decline(id, user.id);
   }
 
   @Patch(':id')
-  @Roles('admin', 'librarian')
+  @HasRoles(Roles.BOOK_UPDATE)
   @UseInterceptors(FileInterceptor('file', {
     storage: memoryStorage(), // Use memory storage to validate before saving to disk
     fileFilter: (req, file, cb) => {
@@ -129,15 +138,15 @@ export class BooksController {
     },
   })
   update(@Param('id') id: string, @Body() updateBookDto: UpdateBookDto, @UploadedFile() file?: Express.Multer.File) {
-    return this.booksService.update(+id, updateBookDto, file);
+    return this.booksService.update(id, updateBookDto, file);
   }
 
   @Delete(':id')
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Delete a book (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_DELETE)
+  @ApiOperation({ summary: 'Delete a book' })
   @ApiResponse({ status: 200, description: 'Book deleted successfully' })
   remove(@Param('id') id: string) {
-    return this.booksService.remove(+id);
+    return this.booksService.remove(id);
   }
 }
 

@@ -19,7 +19,7 @@ export class LoansService {
   ) {}
 
   async create(createLoanDto: CreateLoanDto): Promise<Loan> {
-    const book = await this.booksRepository.findOne(createLoanDto.bookId);
+    const book = await this.booksRepository.findOne({ where: { id: createLoanDto.bookId } });
     if (!book) {
       throw new NotFoundException(`Book with ID ${createLoanDto.bookId} not found`);
     }
@@ -28,7 +28,7 @@ export class LoansService {
       throw new BadRequestException('No available copies of this book');
     }
 
-    const user = await this.usersRepository.findOne(createLoanDto.userId);
+    const user = await this.usersRepository.findOne({ where: { id: createLoanDto.userId } });
     if (!user) {
       throw new NotFoundException(`User with ID ${createLoanDto.userId} not found`);
     }
@@ -41,8 +41,8 @@ export class LoansService {
     return await this.loansRepository.save(loan);
   }
 
-  async createForUser(userId: number, bookId: number): Promise<Loan> {
-    const book = await this.booksRepository.findOne(bookId);
+  async createForUser(userId: string, bookId: string): Promise<Loan> {
+    const book = await this.booksRepository.findOne({ where: { id: bookId } });
     if (!book) {
       throw new NotFoundException(`Book with ID ${bookId} not found`);
     }
@@ -55,34 +55,69 @@ export class LoansService {
       throw new BadRequestException('No available copies of this book');
     }
 
-    const user = await this.usersRepository.findOne(userId);
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // Check if user already has an active loan for this book
+    // Check if user already has a pending or active loan for this book
     const existingLoan = await this.loansRepository.findOne({
-      where: { userId, bookId, status: LoanStatus.ACTIVE },
+      where: [
+        { userId, bookId, status: LoanStatus.ACTIVE },
+        { userId, bookId, status: LoanStatus.PENDING },
+      ],
     });
     if (existingLoan) {
-      throw new BadRequestException('You already have an active loan for this book');
+      throw new BadRequestException('You already have a pending or active loan for this book');
+    }
+
+    const today = new Date();
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 14); // 14 days loan period
+
+    // Create loan with pending status (needs approval)
+    const loan = this.loansRepository.create({
+      bookId,
+      userId,
+      borrowDate: today,
+      dueDate,
+      status: LoanStatus.PENDING,
+    });
+    return await this.loansRepository.save(loan);
+  }
+
+  async approve(id: string): Promise<Loan> {
+    const loan = await this.findOne(id);
+    
+    if (loan.status !== LoanStatus.PENDING) {
+      throw new BadRequestException('Only pending loans can be approved');
+    }
+
+    const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
+    if (!book) {
+      throw new NotFoundException(`Book with ID ${loan.bookId} not found`);
+    }
+
+    if (book.availableCopies <= 0) {
+      throw new BadRequestException('No available copies of this book');
     }
 
     // Decrease available copies
     book.availableCopies -= 1;
     await this.booksRepository.save(book);
 
-    const today = new Date();
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + 14); // 14 days loan period
+    loan.status = LoanStatus.ACTIVE;
+    return await this.loansRepository.save(loan);
+  }
 
-    const loan = this.loansRepository.create({
-      bookId,
-      userId,
-      borrowDate: today,
-      dueDate,
-      status: LoanStatus.ACTIVE,
-    });
+  async decline(id: string): Promise<Loan> {
+    const loan = await this.findOne(id);
+    
+    if (loan.status !== LoanStatus.PENDING) {
+      throw new BadRequestException('Only pending loans can be declined');
+    }
+
+    loan.status = LoanStatus.DECLINED;
     return await this.loansRepository.save(loan);
   }
 
@@ -93,8 +128,9 @@ export class LoansService {
     });
   }
 
-  async findOne(id: number): Promise<Loan> {
-    const loan = await this.loansRepository.findOne(id, {
+  async findOne(id: string): Promise<Loan> {
+    const loan = await this.loansRepository.findOne({
+      where: { id },
       relations: ['book', 'user'],
     });
     if (!loan) {
@@ -103,12 +139,12 @@ export class LoansService {
     return loan;
   }
 
-  async update(id: number, updateLoanDto: UpdateLoanDto): Promise<Loan> {
+  async update(id: string, updateLoanDto: UpdateLoanDto): Promise<Loan> {
     const loan = await this.findOne(id);
     
     // If returning the book
     if (updateLoanDto.returnDate && loan.status === LoanStatus.ACTIVE) {
-      const book = await this.booksRepository.findOne(loan.bookId);
+      const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
       if (book) {
         book.availableCopies += 1;
         await this.booksRepository.save(book);
@@ -120,12 +156,12 @@ export class LoansService {
     return await this.loansRepository.save(loan);
   }
 
-  async remove(id: number): Promise<void> {
+  async remove(id: string): Promise<void> {
     const loan = await this.findOne(id);
     
     // If active loan, return the book
     if (loan.status === LoanStatus.ACTIVE) {
-      const book = await this.booksRepository.findOne(loan.bookId);
+      const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
       if (book) {
         book.availableCopies += 1;
         await this.booksRepository.save(book);
@@ -135,7 +171,7 @@ export class LoansService {
     await this.loansRepository.remove(loan);
   }
 
-  async findByUser(userId: number): Promise<Loan[]> {
+  async findByUser(userId: string): Promise<Loan[]> {
     return await this.loansRepository.find({
       where: { userId },
       relations: ['book', 'user'],
@@ -143,7 +179,7 @@ export class LoansService {
     });
   }
 
-  async findByBook(bookId: number): Promise<Loan[]> {
+  async findByBook(bookId: string): Promise<Loan[]> {
     return await this.loansRepository.find({
       where: { bookId },
       relations: ['book', 'user'],

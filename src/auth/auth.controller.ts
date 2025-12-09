@@ -9,11 +9,33 @@ import { Public } from './decorators/public.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly usersService: UsersService,
+  ) {}
+
+  @Public()
+  @Get('check-setup')
+  @ApiOperation({ summary: 'Check if setup is needed (public endpoint)' })
+  @ApiResponse({ status: 200, description: 'Returns true if no users exist' })
+  async checkSetup() {
+    const count = await this.usersService.count();
+    return { needsSetup: count === 0 };
+  }
+
+  @Public()
+  @Post('setup-super-admin')
+  @ApiOperation({ summary: 'Setup super admin account (public endpoint, only works if no users exist)' })
+  @ApiResponse({ status: 201, description: 'Super admin account created successfully' })
+  @ApiResponse({ status: 400, description: 'Setup already completed or email already exists' })
+  setupSuperAdmin(@Body() registerDto: RegisterDto) {
+    return this.authService.setupSuperAdmin(registerDto);
+  }
 
   @Public()
   @Post('register')

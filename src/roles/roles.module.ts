@@ -14,7 +14,7 @@ export class RolesModule implements OnModuleInit {
   constructor(private rolesService: RolesService) {}
 
   async onModuleInit() {
-    // Ensure default roles exist when module initializes
+    // Ensure all roles from ROLE_DEFINITIONS exist when module initializes
     await this.rolesService.ensureRolesExist();
   }
 }

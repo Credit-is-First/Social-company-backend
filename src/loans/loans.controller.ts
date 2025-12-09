@@ -5,8 +5,9 @@ import { CreateLoanDto } from './dto/create-loan.dto';
 import { UpdateLoanDto } from './dto/update-loan.dto';
 import { Loan } from './entities/loan.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { HasRoles } from '../auth/decorators/roles.decorator';
+import { Roles } from '../roles/roles.constants';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 
@@ -18,64 +19,82 @@ export class LoansController {
   constructor(private readonly loansService: LoansService) {}
 
   @Post()
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Create a new loan (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_LENDING_APPROVE)
+  @ApiOperation({ summary: 'Create a new loan' })
   @ApiResponse({ status: 201, description: 'Loan created successfully', type: Loan })
   create(@Body() createLoanDto: CreateLoanDto) {
     return this.loansService.create(createLoanDto);
   }
 
   @Post('borrow')
-  @ApiOperation({ summary: 'Borrow a book (for current user)' })
-  @ApiResponse({ status: 201, description: 'Book borrowed successfully', type: Loan })
-  borrow(@CurrentUser() user: User, @Body() body: { bookId: number }) {
+  @HasRoles(Roles.BOOK_LENDING_REQUEST)
+  @ApiOperation({ summary: 'Request to borrow a book (for current user)' })
+  @ApiResponse({ status: 201, description: 'Book borrowing requested successfully', type: Loan })
+  borrow(@CurrentUser() user: User, @Body() body: { bookId: string }) {
     return this.loansService.createForUser(user.id, body.bookId);
   }
 
   @Get()
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Get all loans (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_LENDING_READ)
+  @ApiOperation({ summary: 'Get all loans' })
   @ApiResponse({ status: 200, description: 'List of all loans', type: [Loan] })
   findAll(@Query('userId') userId?: string, @Query('bookId') bookId?: string) {
     if (userId) {
-      return this.loansService.findByUser(+userId);
+      return this.loansService.findByUser(userId);
     }
     if (bookId) {
-      return this.loansService.findByBook(+bookId);
+      return this.loansService.findByBook(bookId);
     }
     return this.loansService.findAll();
   }
 
   @Get('active')
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Get all active loans (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_LENDING_READ)
+  @ApiOperation({ summary: 'Get all active loans' })
   @ApiResponse({ status: 200, description: 'List of active loans', type: [Loan] })
   getActiveLoans() {
     return this.loansService.getActiveLoans();
   }
 
   @Get(':id')
+  @HasRoles(Roles.BOOK_LENDING_READ)
   @ApiOperation({ summary: 'Get a loan by ID' })
   @ApiResponse({ status: 200, description: 'Loan found', type: Loan })
   @ApiResponse({ status: 404, description: 'Loan not found' })
   findOne(@Param('id') id: string) {
-    return this.loansService.findOne(+id);
+    return this.loansService.findOne(id);
+  }
+
+  @Patch(':id/approve')
+  @HasRoles(Roles.BOOK_LENDING_APPROVE)
+  @ApiOperation({ summary: 'Approve a loan request' })
+  @ApiResponse({ status: 200, description: 'Loan approved successfully', type: Loan })
+  approve(@Param('id') id: string) {
+    return this.loansService.approve(id);
+  }
+
+  @Patch(':id/decline')
+  @HasRoles(Roles.BOOK_LENDING_DECLINE)
+  @ApiOperation({ summary: 'Decline a loan request' })
+  @ApiResponse({ status: 200, description: 'Loan declined successfully', type: Loan })
+  decline(@Param('id') id: string) {
+    return this.loansService.decline(id);
   }
 
   @Patch(':id')
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Update a loan (e.g., return book) (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_LENDING_APPROVE)
+  @ApiOperation({ summary: 'Update a loan (e.g., return book)' })
   @ApiResponse({ status: 200, description: 'Loan updated successfully', type: Loan })
   update(@Param('id') id: string, @Body() updateLoanDto: UpdateLoanDto) {
-    return this.loansService.update(+id, updateLoanDto);
+    return this.loansService.update(id, updateLoanDto);
   }
 
   @Delete(':id')
-  @Roles('admin', 'librarian')
-  @ApiOperation({ summary: 'Delete a loan (Admin/Librarian only)' })
+  @HasRoles(Roles.BOOK_LENDING_DELETE)
+  @ApiOperation({ summary: 'Delete a loan' })
   @ApiResponse({ status: 200, description: 'Loan deleted successfully' })
   remove(@Param('id') id: string) {
-    return this.loansService.remove(+id);
+    return this.loansService.remove(id);
   }
 }
 
