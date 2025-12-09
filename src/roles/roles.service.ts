@@ -33,6 +33,8 @@ export class RolesService {
 
   async create(
     name: string,
+    resource: string,
+    action: string,
     description?: string,
   ): Promise<Role> {
     const existingRole = await this.findByName(name);
@@ -42,46 +44,20 @@ export class RolesService {
 
     const role = this.rolesRepository.create({
       name,
+      resource,
+      action,
       description,
     });
 
     return await this.rolesRepository.save(role);
   }
 
-  async update(
-    id: string,
-    updateData: {
-      name?: string;
-      description?: string;
-    },
-  ): Promise<Role> {
-    const role = await this.findOne(id);
-
-    if (updateData.name !== undefined) {
-      const existingRole = await this.findByName(updateData.name);
-      if (existingRole && existingRole.id !== id) {
-        throw new BadRequestException(`Role with name ${updateData.name} already exists`);
-      }
-      role.name = updateData.name;
-    }
-
-    if (updateData.description !== undefined) {
-      role.description = updateData.description;
-    }
-
-    return await this.rolesRepository.save(role);
-  }
-
-  async delete(id: string): Promise<void> {
-    const role = await this.findOne(id);
-    await this.rolesRepository.remove(role);
-  }
 
   async ensureRolesExist(): Promise<void> {
     for (const roleDef of ROLE_DEFINITIONS) {
       const existingRole = await this.findByName(roleDef.name);
       if (!existingRole) {
-        await this.create(roleDef.name, roleDef.description);
+        await this.create(roleDef.name, roleDef.resource, roleDef.action, roleDef.description);
       }
     }
   }

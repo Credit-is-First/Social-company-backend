@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Group } from './entities/group.entity';
 import { RolesService } from '../roles/roles.service';
+import { Roles } from '../roles/roles.constants';
 
 @Injectable()
 export class GroupsService {
@@ -118,15 +119,49 @@ export class GroupsService {
   }
 
   async ensureDefaultGroupsExist(): Promise<void> {
-    // Super Admin Group - can be created with roles assigned later
-    const superAdminGroup = await this.findByName('Super Admin');
+    // Super Admin Group - assign all user, user_role, and group management roles
+    let superAdminGroup = await this.findByName('Super Admin');
     if (!superAdminGroup) {
-      await this.create(
+      superAdminGroup = await this.create(
         'Super Admin',
         'Super administrator with all roles. Only one user can be in this group. This group is assigned to the first user during project setup.',
         [],
         true, // isDefault
       );
+    }
+
+    // Assign all user, user_role, and group management roles to Super Admin
+    const superAdminRoleNames = [
+      // User Management
+      Roles.USER_CREATE,
+      Roles.USER_READ,
+      Roles.USER_UPDATE,
+      Roles.USER_DELETE,
+      Roles.USER_BLOCK,
+      Roles.USER_RESET_PASSWORD,
+      // User Role Management
+      Roles.USER_ROLE_CREATE,
+      Roles.USER_ROLE_READ,
+      Roles.USER_ROLE_UPDATE,
+      Roles.USER_ROLE_DELETE,
+      // Group Management
+      Roles.GROUP_CREATE,
+      Roles.GROUP_READ,
+      Roles.GROUP_UPDATE,
+      Roles.GROUP_DELETE,
+    ];
+
+    const superAdminRoles = (await Promise.all(
+      superAdminRoleNames.map(roleName => this.rolesService.findByName(roleName)),
+    )).filter((role): role is NonNullable<typeof role> => role !== undefined);
+
+    // Only update if roles are missing
+    const currentRoleNames = superAdminGroup.roles?.map(r => r.name) || [];
+    const missingRoles = superAdminRoles.filter(role => !currentRoleNames.includes(role.name));
+    
+    if (missingRoles.length > 0) {
+      superAdminGroup.roles = [...(superAdminGroup.roles || []), ...missingRoles];
+      await this.groupsRepository.save(superAdminGroup);
     }
 
     // Admin Group

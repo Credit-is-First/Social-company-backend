@@ -14,11 +14,11 @@ export class Role {
   name: string;
 
   @ApiProperty()
-  @Column({ unique: true })
+  @Column()
   resource: string;
 
   @ApiProperty()
-  @Column({ unique: true })
+  @Column()
   action: string;
 
   @ApiProperty({ required: false })
