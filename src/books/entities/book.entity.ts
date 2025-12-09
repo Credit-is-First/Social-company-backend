@@ -40,6 +40,14 @@ export class Book {
   @Column({ type: 'date', nullable: true })
   publishedDate: Date;
 
+  @ApiProperty({ required: false })
+  @Column({ type: 'boolean', default: false })
+  isEbook: boolean;
+
+  @ApiProperty({ required: false })
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  filePath: string;
+
   @OneToMany(() => Loan, loan => loan.book)
   loans: Loan[];
 

@@ -12,12 +12,20 @@ export class BooksService {
     private booksRepository: Repository<Book>,
   ) {}
 
-  async create(createBookDto: CreateBookDto): Promise<Book> {
-    const book = this.booksRepository.create({
+  async create(createBookDto: CreateBookDto, file?: Express.Multer.File): Promise<Book> {
+    const bookData: Partial<Book> = {
       ...createBookDto,
       availableCopies: createBookDto.totalCopies,
-    });
-    return await this.booksRepository.save(book);
+      isEbook: createBookDto.isEbook || false,
+    };
+
+    if (file && createBookDto.isEbook) {
+      bookData.filePath = `/uploads/ebooks/${file.filename}`;
+    }
+
+    const book = this.booksRepository.create(bookData);
+    const savedBook = await this.booksRepository.save(book);
+    return savedBook as Book;
   }
 
   async findAll(): Promise<Book[]> {
@@ -36,7 +44,7 @@ export class BooksService {
     return book;
   }
 
-  async update(id: number, updateBookDto: UpdateBookDto): Promise<Book> {
+  async update(id: number, updateBookDto: UpdateBookDto, file?: Express.Multer.File): Promise<Book> {
     const book = await this.findOne(id);
     
     if (updateBookDto.totalCopies !== undefined) {
@@ -44,8 +52,22 @@ export class BooksService {
       book.availableCopies = Math.max(0, book.availableCopies + difference);
     }
 
+    if (file && updateBookDto.isEbook) {
+      // Delete old file if exists
+      if (book.filePath) {
+        const fs = require('fs');
+        const path = require('path');
+        const oldFilePath = path.join(process.cwd(), book.filePath);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+      }
+      book.filePath = `/uploads/ebooks/${file.filename}`;
+    }
+
     Object.assign(book, updateBookDto);
-    return await this.booksRepository.save(book);
+    const savedBook = await this.booksRepository.save(book);
+    return savedBook as Book;
   }
 
   async remove(id: number): Promise<void> {

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsInt, IsOptional, IsDateString } from 'class-validator';
+import { IsString, IsNotEmpty, IsInt, IsOptional, IsDateString, IsBoolean } from 'class-validator';
 
 export class CreateBookDto {
   @ApiProperty()
@@ -36,5 +36,10 @@ export class CreateBookDto {
   @IsDateString()
   @IsOptional()
   publishedDate?: Date;
+
+  @ApiProperty({ required: false, default: false })
+  @IsBoolean()
+  @IsOptional()
+  isEbook?: boolean;
 }
 
