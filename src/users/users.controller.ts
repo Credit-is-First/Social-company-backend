@@ -7,7 +7,6 @@ import { User } from './entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from './entities/user.entity';
 import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('users')
@@ -27,7 +26,7 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Get all users (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'List of all users', type: [User] })
   findAll(@Query('search') search?: string) {
@@ -38,7 +37,7 @@ export class UsersController {
   }
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Create a new user (Admin/Librarian only)' })
   @ApiResponse({ status: 201, description: 'User created successfully', type: User })
   create(@Body() createUserDto: CreateUserDto) {
@@ -54,15 +53,23 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Update a user (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'User updated successfully', type: User })
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(+id, updateUserDto);
   }
 
+  @Patch(':id/roles')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Update user roles (Admin only)' })
+  @ApiResponse({ status: 200, description: 'User roles updated successfully', type: User })
+  updateRoles(@Param('id') id: string, @Body() body: { roleIds: number[] }) {
+    return this.usersService.updateUserRoles(+id, body.roleIds);
+  }
+
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles('admin')
   @ApiOperation({ summary: 'Delete a user (Admin only)' })
   @ApiResponse({ status: 200, description: 'User deleted successfully' })
   remove(@Param('id') id: string) {

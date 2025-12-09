@@ -1,7 +1,9 @@
-import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany, ManyToMany, JoinTable } from 'typeorm';
 import { Loan } from '../../loans/entities/loan.entity';
+import { Role } from '../../roles/entities/role.entity';
 import { ApiProperty } from '@nestjs/swagger';
 
+// Keep enum for backward compatibility and default role assignment
 export enum UserRole {
   ADMIN = 'admin',
   LIBRARIAN = 'librarian',
@@ -34,14 +36,6 @@ export class User {
   @Column({ nullable: true })
   password: string;
 
-  @ApiProperty({ enum: UserRole, default: UserRole.USER })
-  @Column({
-    type: 'enum',
-    enum: UserRole,
-    default: UserRole.USER,
-  })
-  role: UserRole;
-
   @ApiProperty({ required: false })
   @Column({ type: 'text', nullable: true })
   securityQuestion: string;
@@ -49,6 +43,14 @@ export class User {
   @ApiProperty({ required: false })
   @Column({ type: 'text', nullable: true })
   securityAnswer: string;
+
+  @ManyToMany(() => Role, role => role.users, { eager: true })
+  @JoinTable({
+    name: 'user_roles',
+    joinColumn: { name: 'userId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'roleId', referencedColumnName: 'id' },
+  })
+  roles: Role[];
 
   @OneToMany(() => Loan, loan => loan.user)
   loans: Loan[];
@@ -60,5 +62,15 @@ export class User {
   @ApiProperty()
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
   updatedAt: Date;
+
+  // Helper method to check if user has a role
+  hasRole(roleName: string): boolean {
+    return this.roles?.some(role => role.name === roleName) || false;
+  }
+
+  // Helper method to get role names array
+  getRoleNames(): string[] {
+    return this.roles?.map(role => role.name) || [];
+  }
 }
 

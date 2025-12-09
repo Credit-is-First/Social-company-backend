@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { BooksService } from './books.service';
@@ -8,10 +8,10 @@ import { Book } from './entities/book.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/entities/user.entity';
 import { Public } from '../auth/decorators/public.decorator';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../users/entities/user.entity';
+import { memoryStorage } from 'multer';
 
 @ApiTags('books')
 @Controller('books')
@@ -21,22 +21,15 @@ export class BooksController {
   constructor(private readonly booksService: BooksService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian', 'user') // Users can add books, but they need approval
   @UseInterceptors(FileInterceptor('file', {
-    storage: diskStorage({
-      destination: './uploads/ebooks',
-      filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const ext = extname(file.originalname);
-        cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-      },
-    }),
+    storage: memoryStorage(), // Use memory storage to validate before saving to disk
     fileFilter: (req, file, cb) => {
       const allowedMimes = ['application/pdf', 'application/epub+zip', 'application/x-mobipocket-ebook'];
       if (allowedMimes.includes(file.mimetype)) {
         cb(null, true);
       } else {
-        cb(new Error('Invalid file type. Only PDF, EPUB, and MOBI files are allowed.'), false);
+        cb(new BadRequestException('Invalid file type. Only PDF, EPUB, and MOBI files are allowed.'), false);
       }
     },
     limits: {
@@ -44,7 +37,7 @@ export class BooksController {
     },
   }))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Create a new book (Admin/Librarian only)' })
+  @ApiOperation({ summary: 'Create a new book (Requires approval for regular users)' })
   @ApiResponse({ status: 201, description: 'Book created successfully', type: Book })
   @ApiBody({
     schema: {
@@ -65,8 +58,8 @@ export class BooksController {
       },
     },
   })
-  create(@Body() createBookDto: CreateBookDto, @UploadedFile() file?: Express.Multer.File) {
-    return this.booksService.create(createBookDto, file);
+  create(@Body() createBookDto: CreateBookDto, @UploadedFile() file?: Express.Multer.File, @CurrentUser() user?: User) {
+    return this.booksService.create(createBookDto, file, user);
   }
 
   @Get()
@@ -89,23 +82,24 @@ export class BooksController {
     return this.booksService.findOne(+id);
   }
 
+  @Patch(':id/approve')
+  @Roles('admin', 'librarian')
+  @ApiOperation({ summary: 'Approve a book (Admin/Librarian only)' })
+  @ApiResponse({ status: 200, description: 'Book approved successfully', type: Book })
+  approve(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.booksService.approve(+id, user.id);
+  }
+
   @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @UseInterceptors(FileInterceptor('file', {
-    storage: diskStorage({
-      destination: './uploads/ebooks',
-      filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const ext = extname(file.originalname);
-        cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-      },
-    }),
+    storage: memoryStorage(), // Use memory storage to validate before saving to disk
     fileFilter: (req, file, cb) => {
       const allowedMimes = ['application/pdf', 'application/epub+zip', 'application/x-mobipocket-ebook'];
       if (allowedMimes.includes(file.mimetype)) {
         cb(null, true);
       } else {
-        cb(new Error('Invalid file type. Only PDF, EPUB, and MOBI files are allowed.'), false);
+        cb(new BadRequestException('Invalid file type. Only PDF, EPUB, and MOBI files are allowed.'), false);
       }
     },
     limits: {
@@ -139,7 +133,7 @@ export class BooksController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Delete a book (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'Book deleted successfully' })
   remove(@Param('id') id: string) {

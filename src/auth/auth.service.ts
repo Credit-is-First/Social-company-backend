@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User, UserRole } from '../users/entities/user.entity';
+import { RolesService } from '../roles/roles.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -15,16 +16,27 @@ export class AuthService {
     @InjectRepository(User)
     private usersRepository: Repository<User>,
     private jwtService: JwtService,
+    private rolesService: RolesService,
   ) {}
 
-  async register(registerDto: RegisterDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer'>; access_token: string }> {
+  async register(registerDto: RegisterDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getRoleNames'>; access_token: string }> {
     const existingUser = await this.usersRepository.findOne({ where: { email: registerDto.email } });
     if (existingUser) {
       throw new BadRequestException('Email already exists');
     }
 
+    // Ensure default roles exist
+    await this.rolesService.ensureRolesExist();
+
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
     const hashedAnswer = await bcrypt.hash(registerDto.securityAnswer.toLowerCase(), 10);
+
+    // Get default role or specified role
+    const roleName = registerDto.role || UserRole.USER;
+    const defaultRole = await this.rolesService.findByName(roleName);
+    if (!defaultRole) {
+      throw new BadRequestException(`Role ${roleName} not found`);
+    }
 
     const user = this.usersRepository.create({
       name: registerDto.name,
@@ -33,14 +45,18 @@ export class AuthService {
       address: registerDto.address,
       password: hashedPassword,
       securityAnswer: hashedAnswer,
-      role: registerDto.role || UserRole.USER,
+      roles: [defaultRole],
       securityQuestion: registerDto.securityQuestion,
     });
 
     const savedUser = await this.usersRepository.save(user);
     const { password, securityAnswer, ...userWithoutSensitive } = savedUser;
 
-    const payload = { email: user.email, sub: user.id, role: user.role };
+    // Load roles for JWT payload
+    const userWithRoles = await this.usersRepository.findOne(savedUser.id, { relations: ['roles'] });
+    const roleNames = userWithRoles?.roles?.map(r => r.name) || [];
+
+    const payload = { email: user.email, sub: user.id, roles: roleNames };
     const access_token = this.jwtService.sign(payload);
 
     return {
@@ -49,8 +65,11 @@ export class AuthService {
     };
   }
 
-  async login(loginDto: LoginDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer'>; access_token: string }> {
-    const user = await this.usersRepository.findOne({ where: { email: loginDto.email } });
+  async login(loginDto: LoginDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getRoleNames'>; access_token: string }> {
+    const user = await this.usersRepository.findOne({ 
+      where: { email: loginDto.email },
+      relations: ['roles']
+    });
     if (!user || !user.password) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -61,8 +80,9 @@ export class AuthService {
     }
 
     const { password, securityAnswer, ...userWithoutSensitive } = user;
+    const roleNames = user.roles?.map(r => r.name) || [];
 
-    const payload = { email: user.email, sub: user.id, role: user.role };
+    const payload = { email: user.email, sub: user.id, roles: roleNames };
     const access_token = this.jwtService.sign(payload);
 
     return {
@@ -116,7 +136,10 @@ export class AuthService {
   }
 
   async validateUser(userId: number): Promise<User> {
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    const user = await this.usersRepository.findOne({ 
+      where: { id: userId },
+      relations: ['roles']
+    });
     if (!user) {
       throw new UnauthorizedException('User not found');
     }

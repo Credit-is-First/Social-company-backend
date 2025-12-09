@@ -7,7 +7,6 @@ import { Loan } from './entities/loan.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/entities/user.entity';
 
 @ApiTags('loans')
 @Controller('loans')
@@ -17,7 +16,7 @@ export class LoansController {
   constructor(private readonly loansService: LoansService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Create a new loan (Admin/Librarian only)' })
   @ApiResponse({ status: 201, description: 'Loan created successfully', type: Loan })
   create(@Body() createLoanDto: CreateLoanDto) {
@@ -25,7 +24,7 @@ export class LoansController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Get all loans (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'List of all loans', type: [Loan] })
   findAll(@Query('userId') userId?: string, @Query('bookId') bookId?: string) {
@@ -39,7 +38,7 @@ export class LoansController {
   }
 
   @Get('active')
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Get all active loans (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'List of active loans', type: [Loan] })
   getActiveLoans() {
@@ -55,7 +54,7 @@ export class LoansController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Update a loan (e.g., return book) (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'Loan updated successfully', type: Loan })
   update(@Param('id') id: string, @Body() updateLoanDto: UpdateLoanDto) {
@@ -63,7 +62,7 @@ export class LoansController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @Roles('admin', 'librarian')
   @ApiOperation({ summary: 'Delete a loan (Admin/Librarian only)' })
   @ApiResponse({ status: 200, description: 'Loan deleted successfully' })
   remove(@Param('id') id: string) {

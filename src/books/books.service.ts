@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { CreateBookDto } from './dto/create-book.dto';
 import { UpdateBookDto } from './dto/update-book.dto';
 import { Book } from './entities/book.entity';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class BooksService {
@@ -12,20 +14,58 @@ export class BooksService {
     private booksRepository: Repository<Book>,
   ) {}
 
-  async create(createBookDto: CreateBookDto, file?: Express.Multer.File): Promise<Book> {
+  async create(createBookDto: CreateBookDto, file?: Express.Multer.File, user?: any): Promise<Book> {
+    // Auto-approve if created by admin or librarian, otherwise needs approval
+    const userRoleNames = user?.roles?.map((r: any) => r.name) || [];
+    const isAutoApproved = userRoleNames.includes('admin') || userRoleNames.includes('librarian');
+    
     const bookData: Partial<Book> = {
-      ...createBookDto,
+      title: createBookDto.title,
+      author: createBookDto.author,
+      isbn: createBookDto.isbn,
+      category: createBookDto.category,
+      totalCopies: createBookDto.totalCopies,
       availableCopies: createBookDto.totalCopies,
+      description: createBookDto.description,
+      publishedDate: createBookDto.publishedDate ? new Date(createBookDto.publishedDate) : undefined,
       isEbook: createBookDto.isEbook || false,
+      isApproved: isAutoApproved,
     };
 
-    if (file && createBookDto.isEbook) {
-      bookData.filePath = `/uploads/ebooks/${file.filename}`;
+    if (isAutoApproved && user?.id) {
+      bookData.approvedBy = user.id;
+      bookData.approvedAt = new Date();
+    }
+
+    // Save file to disk only after validation passes
+    if (file && createBookDto.isEbook && file.buffer) {
+      const uploadsDir = path.join(process.cwd(), 'uploads', 'ebooks');
+      // Ensure directory exists
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.originalname);
+      const filename = `file-${uniqueSuffix}${ext}`;
+      const filePath = path.join(uploadsDir, filename);
+      
+      // Write file to disk
+      fs.writeFileSync(filePath, file.buffer);
+      bookData.filePath = `/uploads/ebooks/${filename}`;
     }
 
     const book = this.booksRepository.create(bookData);
     const savedBook = await this.booksRepository.save(book);
     return savedBook as Book;
+  }
+
+  async approve(id: number, userId: number): Promise<Book> {
+    const book = await this.findOne(id);
+    book.isApproved = true;
+    book.approvedBy = userId;
+    book.approvedAt = new Date();
+    return await this.booksRepository.save(book);
   }
 
   async findAll(): Promise<Book[]> {
@@ -52,20 +92,45 @@ export class BooksService {
       book.availableCopies = Math.max(0, book.availableCopies + difference);
     }
 
-    if (file && updateBookDto.isEbook) {
+    if (file && updateBookDto.isEbook && file.buffer) {
       // Delete old file if exists
       if (book.filePath) {
-        const fs = require('fs');
-        const path = require('path');
         const oldFilePath = path.join(process.cwd(), book.filePath);
         if (fs.existsSync(oldFilePath)) {
           fs.unlinkSync(oldFilePath);
         }
       }
-      book.filePath = `/uploads/ebooks/${file.filename}`;
+      
+      // Save new file to disk
+      const uploadsDir = path.join(process.cwd(), 'uploads', 'ebooks');
+      // Ensure directory exists
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.originalname);
+      const filename = `file-${uniqueSuffix}${ext}`;
+      const filePath = path.join(uploadsDir, filename);
+      
+      // Write file to disk
+      fs.writeFileSync(filePath, file.buffer);
+      book.filePath = `/uploads/ebooks/${filename}`;
     }
 
-    Object.assign(book, updateBookDto);
+    // Convert publishedDate string to Date if provided
+    if (updateBookDto.publishedDate !== undefined) {
+      book.publishedDate = updateBookDto.publishedDate ? new Date(updateBookDto.publishedDate) : null;
+    }
+
+    // Update other fields
+    if (updateBookDto.title !== undefined) book.title = updateBookDto.title;
+    if (updateBookDto.author !== undefined) book.author = updateBookDto.author;
+    if (updateBookDto.isbn !== undefined) book.isbn = updateBookDto.isbn;
+    if (updateBookDto.category !== undefined) book.category = updateBookDto.category;
+    if (updateBookDto.description !== undefined) book.description = updateBookDto.description;
+    if (updateBookDto.isEbook !== undefined) book.isEbook = updateBookDto.isEbook;
+
     const savedBook = await this.booksRepository.save(book);
     return savedBook as Book;
   }

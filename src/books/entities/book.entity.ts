@@ -48,6 +48,18 @@ export class Book {
   @Column({ type: 'varchar', length: 500, nullable: true })
   filePath: string;
 
+  @ApiProperty({ required: false })
+  @Column({ type: 'boolean', default: false })
+  isApproved: boolean;
+
+  @ApiProperty({ required: false })
+  @Column({ type: 'int', nullable: true })
+  approvedBy: number;
+
+  @ApiProperty({ required: false })
+  @Column({ type: 'timestamp', nullable: true })
+  approvedAt: Date;
+
   @OneToMany(() => Loan, loan => loan.book)
   loans: Loan[];
 
