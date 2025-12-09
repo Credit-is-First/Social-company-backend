@@ -7,6 +7,8 @@ import { Loan } from './entities/loan.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../users/entities/user.entity';
 
 @ApiTags('loans')
 @Controller('loans')
@@ -21,6 +23,13 @@ export class LoansController {
   @ApiResponse({ status: 201, description: 'Loan created successfully', type: Loan })
   create(@Body() createLoanDto: CreateLoanDto) {
     return this.loansService.create(createLoanDto);
+  }
+
+  @Post('borrow')
+  @ApiOperation({ summary: 'Borrow a book (for current user)' })
+  @ApiResponse({ status: 201, description: 'Book borrowed successfully', type: Loan })
+  borrow(@CurrentUser() user: User, @Body() body: { bookId: number }) {
+    return this.loansService.createForUser(user.id, body.bookId);
   }
 
   @Get()

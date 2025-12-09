@@ -61,5 +61,14 @@ export class AuthController {
     const { password, securityAnswer, ...userWithoutSensitive } = user;
     return userWithoutSensitive;
   }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Patch('profile')
+  @ApiOperation({ summary: 'Update current user profile' })
+  @ApiResponse({ status: 200, description: 'Profile updated successfully' })
+  async updateProfile(@CurrentUser() user: User, @Body() updateData: { name?: string; phone?: string; address?: string }) {
+    return this.authService.updateProfile(user.id, updateData);
+  }
 }
 

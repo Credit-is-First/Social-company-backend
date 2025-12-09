@@ -135,6 +135,24 @@ export class AuthService {
     return { message: 'Password changed successfully' };
   }
 
+  async updateProfile(userId: number, updateData: { name?: string; phone?: string; address?: string }): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getRoleNames'>> {
+    const user = await this.usersRepository.findOne({ 
+      where: { id: userId },
+      relations: ['roles']
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (updateData.name !== undefined) user.name = updateData.name;
+    if (updateData.phone !== undefined) user.phone = updateData.phone;
+    if (updateData.address !== undefined) user.address = updateData.address;
+
+    const updatedUser = await this.usersRepository.save(user);
+    const { password, securityAnswer, ...userWithoutSensitive } = updatedUser;
+    return userWithoutSensitive;
+  }
+
   async validateUser(userId: number): Promise<User> {
     const user = await this.usersRepository.findOne({ 
       where: { id: userId },

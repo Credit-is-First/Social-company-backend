@@ -41,6 +41,51 @@ export class LoansService {
     return await this.loansRepository.save(loan);
   }
 
+  async createForUser(userId: number, bookId: number): Promise<Loan> {
+    const book = await this.booksRepository.findOne(bookId);
+    if (!book) {
+      throw new NotFoundException(`Book with ID ${bookId} not found`);
+    }
+
+    if (!book.isApproved) {
+      throw new BadRequestException('This book is not approved yet');
+    }
+
+    if (book.availableCopies <= 0) {
+      throw new BadRequestException('No available copies of this book');
+    }
+
+    const user = await this.usersRepository.findOne(userId);
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    // Check if user already has an active loan for this book
+    const existingLoan = await this.loansRepository.findOne({
+      where: { userId, bookId, status: LoanStatus.ACTIVE },
+    });
+    if (existingLoan) {
+      throw new BadRequestException('You already have an active loan for this book');
+    }
+
+    // Decrease available copies
+    book.availableCopies -= 1;
+    await this.booksRepository.save(book);
+
+    const today = new Date();
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 14); // 14 days loan period
+
+    const loan = this.loansRepository.create({
+      bookId,
+      userId,
+      borrowDate: today,
+      dueDate,
+      status: LoanStatus.ACTIVE,
+    });
+    return await this.loansRepository.save(loan);
+  }
+
   async findAll(): Promise<Loan[]> {
     return await this.loansRepository.find({
       relations: ['book', 'user'],
