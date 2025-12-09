@@ -53,5 +53,9 @@ export class UsersService {
       .orderBy('user.createdAt', 'DESC')
       .getMany();
   }
+
+  async count(): Promise<number> {
+    return await this.usersRepository.count();
+  }
 }
 

@@ -17,12 +17,13 @@ import { Public } from '../auth/decorators/public.decorator';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  @Post()
-  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
-  @ApiOperation({ summary: 'Create a new user (Admin/Librarian only)' })
-  @ApiResponse({ status: 201, description: 'User created successfully', type: User })
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  @Public()
+  @Get('check-setup')
+  @ApiOperation({ summary: 'Check if setup is needed (public endpoint)' })
+  @ApiResponse({ status: 200, description: 'Returns true if no users exist' })
+  async checkSetup() {
+    const count = await this.usersService.count();
+    return { needsSetup: count === 0 };
   }
 
   @Get()
@@ -34,6 +35,14 @@ export class UsersController {
       return this.usersService.search(search);
     }
     return this.usersService.findAll();
+  }
+
+  @Post()
+  @Roles(UserRole.ADMIN, UserRole.LIBRARIAN)
+  @ApiOperation({ summary: 'Create a new user (Admin/Librarian only)' })
+  @ApiResponse({ status: 201, description: 'User created successfully', type: User })
+  create(@Body() createUserDto: CreateUserDto) {
+    return this.usersService.create(createUserDto);
   }
 
   @Get(':id')
