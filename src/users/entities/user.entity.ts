@@ -4,15 +4,6 @@ import { Role } from '../../roles/entities/role.entity';
 import { Group } from '../../groups/entities/group.entity';
 import { ApiProperty } from '@nestjs/swagger';
 
-// @deprecated This enum is kept for backward compatibility only.
-// The system now uses role groups and function-based permissions instead of fixed roles.
-// Roles should be created dynamically with specific permissions assigned.
-export enum UserRole {
-  ADMIN = 'admin',
-  LIBRARIAN = 'librarian',
-  USER = 'user',
-}
-
 @Entity('users')
 export class User {
   @ApiProperty()

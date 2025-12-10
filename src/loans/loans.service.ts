@@ -194,5 +194,30 @@ export class LoansService {
       order: { dueDate: 'ASC' },
     });
   }
+
+  async cancelUserLoan(userId: string, loanId: string): Promise<void> {
+    const loan = await this.findOne(loanId);
+    
+    // Verify that the loan belongs to the user
+    if (loan.userId !== userId) {
+      throw new BadRequestException('You can only cancel your own loans');
+    }
+
+    // Only allow canceling pending or active loans
+    if (loan.status !== LoanStatus.PENDING && loan.status !== LoanStatus.ACTIVE) {
+      throw new BadRequestException('You can only cancel pending or active loans');
+    }
+
+    // If active loan, return the book
+    if (loan.status === LoanStatus.ACTIVE) {
+      const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
+      if (book) {
+        book.availableCopies += 1;
+        await this.booksRepository.save(book);
+      }
+    }
+    
+    await this.loansRepository.remove(loan);
+  }
 }
 

@@ -34,6 +34,13 @@ export class LoansController {
     return this.loansService.createForUser(user.id, body.bookId);
   }
 
+  @Get('my')
+  @ApiOperation({ summary: 'Get current user\'s loans' })
+  @ApiResponse({ status: 200, description: 'List of current user\'s loans', type: [Loan] })
+  getMyLoans(@CurrentUser() user: User) {
+    return this.loansService.findByUser(user.id);
+  }
+
   @Get()
   @HasRoles(Roles.BOOK_LENDING_READ)
   @ApiOperation({ summary: 'Get all loans' })
@@ -87,6 +94,13 @@ export class LoansController {
   @ApiResponse({ status: 200, description: 'Loan updated successfully', type: Loan })
   update(@Param('id') id: string, @Body() updateLoanDto: UpdateLoanDto) {
     return this.loansService.update(id, updateLoanDto);
+  }
+
+  @Delete('my/:id')
+  @ApiOperation({ summary: 'Cancel/delete current user\'s own loan' })
+  @ApiResponse({ status: 200, description: 'Loan cancelled successfully' })
+  cancelMyLoan(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.loansService.cancelUserLoan(user.id, id);
   }
 
   @Delete(':id')
