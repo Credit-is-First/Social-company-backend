@@ -133,7 +133,6 @@ export class GroupsService {
     // Assign all user, user_role, and group management roles to Super Admin
     const superAdminRoleNames = [
       // User Management
-      Roles.USER_CREATE,
       Roles.USER_READ,
       Roles.USER_UPDATE,
       Roles.USER_DELETE,

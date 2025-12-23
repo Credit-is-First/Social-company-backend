@@ -2,7 +2,6 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { User } from './entities/user.entity';
 import { RolesService } from '../roles/roles.service';
@@ -16,22 +15,6 @@ export class UsersService {
     private rolesService: RolesService,
     private groupsService: GroupsService,
   ) {}
-
-  async create(createUserDto: CreateUserDto): Promise<User> {
-    const user = this.usersRepository.create(createUserDto);
-    
-    // Assign roles if specified
-    if (createUserDto.roleIds && Array.isArray(createUserDto.roleIds) && createUserDto.roleIds.length > 0) {
-      const roles = await Promise.all(
-        createUserDto.roleIds.map(roleId => this.rolesService.findOne(roleId))
-      );
-      user.roles = roles.filter(r => r !== undefined);
-    } else {
-      user.roles = [];
-    }
-    
-    return await this.usersRepository.save(user);
-  }
 
   async findAll(): Promise<User[]> {
     return await this.usersRepository.find({

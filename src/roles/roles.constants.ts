@@ -23,7 +23,6 @@ export enum RoleAction {
 // Role name format: resource:action
 export const Roles = {
   // User Management
-  USER_CREATE: 'user:create',
   USER_READ: 'user:read',
   USER_UPDATE: 'user:update',
   USER_DELETE: 'user:delete',
@@ -62,12 +61,6 @@ export type RoleName = typeof Roles[keyof typeof Roles];
 // Role definitions with descriptions
 export const ROLE_DEFINITIONS = [
   // User Management
-  {
-    name: Roles.USER_CREATE,
-    resource: RoleResource.USER,
-    action: RoleAction.CREATE,
-    description: 'Create new users',
-  },
   {
     name: Roles.USER_READ,
     resource: RoleResource.USER,
