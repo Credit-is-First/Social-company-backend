@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, UseInterceptors, UploadedFile, BadRequestException, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { BooksService } from './books.service';
@@ -77,6 +78,21 @@ export class BooksController {
       return this.booksService.search(paginationDto.search);
     }
     return this.booksService.findAll();
+  }
+
+  @Get('export/csv')
+  @HasRoles(Roles.BOOK_READ)
+  @ApiOperation({ summary: 'Export books to CSV file' })
+  @ApiResponse({ status: 200, description: 'CSV file generated successfully' })
+  async exportToCSV(@Query() filters: any, @Res() res: Response) {
+    try {
+      const csv = await this.booksService.exportToCSV(filters);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=books-export.csv');
+      res.send(csv);
+    } catch (error) {
+      throw new BadRequestException('Error generating CSV export');
+    }
   }
 
   @Get(':id')

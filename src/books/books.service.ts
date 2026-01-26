@@ -269,5 +269,113 @@ export class BooksService {
       totalPages: Math.ceil(total / limit),
     };
   }
+
+  /**
+   * Export books to CSV format
+   * @param filters - Optional filters to apply to the export
+   * @returns CSV string
+   */
+  async exportToCSV(filters?: {
+    search?: string;
+    status?: BookStatus;
+    title?: string;
+    author?: string;
+    isbn?: string;
+    category?: string;
+  }): Promise<string> {
+    const queryBuilder = this.booksRepository.createQueryBuilder('book');
+
+    // Apply filters if provided
+    if (filters?.search) {
+      queryBuilder.where(
+        '(book.title LIKE :search OR book.author LIKE :search OR book.isbn LIKE :search OR book.category LIKE :search)',
+        { search: `%${filters.search}%` }
+      );
+    }
+
+    if (filters?.status) {
+      queryBuilder.andWhere('book.status = :status', { status: filters.status });
+    }
+
+    if (filters?.title) {
+      queryBuilder.andWhere('book.title LIKE :title', { title: `%${filters.title}%` });
+    }
+
+    if (filters?.author) {
+      queryBuilder.andWhere('book.author LIKE :author', { author: `%${filters.author}%` });
+    }
+
+    if (filters?.isbn) {
+      queryBuilder.andWhere('book.isbn LIKE :isbn', { isbn: `%${filters.isbn}%` });
+    }
+
+    if (filters?.category) {
+      queryBuilder.andWhere('book.category LIKE :category', { category: `%${filters.category}%` });
+    }
+
+    // Order by title for better readability
+    queryBuilder.orderBy('book.title', 'ASC');
+
+    const books = await queryBuilder.getMany();
+
+    // CSV header
+    const headers = [
+      'Title',
+      'Author',
+      'ISBN',
+      'Category',
+      'Total Copies',
+      'Available Copies',
+      'Status',
+      'Is Ebook',
+      'Published Date',
+      'Description',
+      'Created At',
+      'Updated At',
+    ];
+
+    // Escape CSV values (handle commas, quotes, newlines)
+    const escapeCSV = (value: any): string => {
+      if (value === null || value === undefined) {
+        return '';
+      }
+      const stringValue = String(value);
+      // If value contains comma, quote, or newline, wrap in quotes and escape quotes
+      if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+        return `"${stringValue.replace(/"/g, '""')}"`;
+      }
+      return stringValue;
+    };
+
+    // Format date for CSV
+    const formatDate = (date: Date | null | undefined): string => {
+      if (!date) return '';
+      return new Date(date).toISOString().split('T')[0];
+    };
+
+    // Build CSV rows
+    const rows = books.map((book) => [
+      escapeCSV(book.title),
+      escapeCSV(book.author),
+      escapeCSV(book.isbn),
+      escapeCSV(book.category),
+      escapeCSV(book.totalCopies),
+      escapeCSV(book.availableCopies),
+      escapeCSV(book.status),
+      escapeCSV(book.isEbook ? 'Yes' : 'No'),
+      escapeCSV(formatDate(book.publishedDate)),
+      escapeCSV(book.description),
+      escapeCSV(formatDate(book.createdAt)),
+      escapeCSV(formatDate(book.updatedAt)),
+    ]);
+
+    // Combine header and rows
+    const csvLines = [
+      headers.join(','),
+      ...rows.map((row) => row.join(',')),
+    ];
+
+    return csvLines.join('\n');
+  }
 }
 
