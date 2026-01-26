@@ -42,6 +42,7 @@ export const Roles = {
   GROUP_DELETE: 'group:delete',
 
   // Book Management
+  BOOK_READ: 'book:read',
   BOOK_CREATE: 'book:create',
   BOOK_UPDATE: 'book:update',
   BOOK_DELETE: 'book:delete',
@@ -145,6 +146,12 @@ export const ROLE_DEFINITIONS = [
   },
 
   // Book Management
+  {
+    name: Roles.BOOK_READ,
+    resource: RoleResource.BOOK,
+    action: RoleAction.READ,
+    description: 'View books',
+  },
   {
     name: Roles.BOOK_CREATE,
     resource: RoleResource.BOOK,

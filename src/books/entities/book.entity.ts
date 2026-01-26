@@ -1,6 +1,15 @@
-import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany, ManyToOne, JoinColumn } from 'typeorm';
 import { Loan } from '../../loans/entities/loan.entity';
+import { User } from '../../users/entities/user.entity';
 import { ApiProperty } from '@nestjs/swagger';
+
+export enum BookStatus {
+  WORKING = 'working',
+  REVIEWING = 'reviewing',
+  APPROVED = 'approved',
+  DECLINED = 'declined',
+  DEPRECATED = 'deprecated',
+}
 
 @Entity('books')
 export class Book {
@@ -48,17 +57,33 @@ export class Book {
   @Column({ type: 'varchar', length: 500, nullable: true })
   filePath: string;
 
-  @ApiProperty({ required: false })
-  @Column({ type: 'boolean', default: false })
-  isApproved: boolean;
+  @ApiProperty({ enum: BookStatus })
+  @Column({
+    type: 'enum',
+    enum: BookStatus,
+      default: BookStatus.REVIEWING,
+  })
+  status: BookStatus;
 
   @ApiProperty({ required: false })
   @Column({ type: 'varchar', length: 36, nullable: true })
   approvedBy: string;
 
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'approvedBy' })
+  approvedByUser: User;
+
   @ApiProperty({ required: false })
   @Column({ type: 'timestamp', nullable: true })
   approvedAt: Date;
+
+  @ApiProperty({ required: false })
+  @Column({ type: 'text', nullable: true })
+  rejectionReason: string;
+
+  @ApiProperty({ required: false })
+  @Column({ type: 'text', nullable: true })
+  deprecationReason: string;
 
   @OneToMany(() => Loan, loan => loan.book)
   loans: Loan[];

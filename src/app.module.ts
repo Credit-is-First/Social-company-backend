@@ -7,6 +7,7 @@ import { LoansModule } from './loans/loans.module';
 import { AuthModule } from './auth/auth.module';
 import { RolesModule } from './roles/roles.module';
 import { GroupsModule } from './groups/groups.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { Book } from './books/entities/book.entity';
 import { User } from './users/entities/user.entity';
 import { Loan } from './loans/entities/loan.entity';
@@ -34,6 +35,7 @@ import { RolesGuard } from './auth/guards/roles.guard';
     BooksModule,
     UsersModule,
     LoansModule,
+    DashboardModule,
   ],
   providers: [
     {

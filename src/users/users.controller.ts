@@ -37,8 +37,8 @@ export class UsersController {
 
   @Patch(':id')
   @HasRoles(Roles.USER_UPDATE)
-  @ApiOperation({ summary: 'Update a user' })
-  @ApiResponse({ status: 200, description: 'User updated successfully', type: User })
+  @ApiOperation({ summary: 'Update user roles (personal data can only be updated by the user themselves via /auth/profile)' })
+  @ApiResponse({ status: 200, description: 'User roles updated successfully', type: User })
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(id, updateUserDto);
   }

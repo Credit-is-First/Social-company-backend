@@ -65,11 +65,16 @@ export class BooksController {
 
   @Get()
   @Public()
-  @ApiOperation({ summary: 'Get all books (Public)' })
-  @ApiResponse({ status: 200, description: 'List of all books', type: [Book] })
-  findAll(@Query('search') search?: string) {
-    if (search) {
-      return this.booksService.search(search);
+  @ApiOperation({ summary: 'Get all books with pagination (Public)' })
+  @ApiResponse({ status: 200, description: 'Paginated list of books' })
+  findAll(@Query() paginationDto: any) {
+    // If pagination parameters are provided, use pagination endpoint
+    if (paginationDto.page || paginationDto.limit || paginationDto.sortBy || paginationDto.status) {
+      return this.booksService.findWithPagination(paginationDto);
+    }
+    // Otherwise, use simple search or findAll for backward compatibility
+    if (paginationDto.search) {
+      return this.booksService.search(paginationDto.search);
     }
     return this.booksService.findAll();
   }
@@ -95,8 +100,16 @@ export class BooksController {
   @HasRoles(Roles.BOOK_DECLINE)
   @ApiOperation({ summary: 'Decline a book' })
   @ApiResponse({ status: 200, description: 'Book declined successfully', type: Book })
-  decline(@Param('id') id: string, @CurrentUser() user: User) {
-    return this.booksService.decline(id, user.id);
+  decline(@Param('id') id: string, @Body() body: { reason?: string }, @CurrentUser() user: User) {
+    return this.booksService.decline(id, user.id, body.reason);
+  }
+
+  @Patch(':id/deprecate')
+  @HasRoles(Roles.BOOK_APPROVE)
+  @ApiOperation({ summary: 'Deprecate a book (hide from normal listings)' })
+  @ApiResponse({ status: 200, description: 'Book deprecated successfully', type: Book })
+  deprecate(@Param('id') id: string, @Body() body: { reason?: string }, @CurrentUser() user: User) {
+    return this.booksService.deprecate(id, user.id, body.reason);
   }
 
   @Patch(':id')
@@ -116,7 +129,7 @@ export class BooksController {
     },
   }))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Update a book (Admin/Librarian only)' })
+  @ApiOperation({ summary: 'Update a book (Requires book:update role)' })
   @ApiResponse({ status: 200, description: 'Book updated successfully', type: Book })
   @ApiBody({
     schema: {
@@ -137,8 +150,9 @@ export class BooksController {
       },
     },
   })
-  update(@Param('id') id: string, @Body() updateBookDto: UpdateBookDto, @UploadedFile() file?: Express.Multer.File) {
-    return this.booksService.update(id, updateBookDto, file);
+  update(@Param('id') id: string, @Body() updateBookDto: UpdateBookDto & { requestReview?: boolean }, @UploadedFile() file?: Express.Multer.File) {
+    const { requestReview, ...bookData } = updateBookDto;
+    return this.booksService.update(id, bookData, file, requestReview);
   }
 
   @Delete(':id')

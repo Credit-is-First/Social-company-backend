@@ -37,16 +37,18 @@ export class UsersService {
   async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
     const user = await this.findOne(id);
     
-    // Handle role updates
+    // Only allow role updates through this endpoint
+    // Personal data (name, email, phone, address) should only be updated by users themselves via /auth/profile
     if (updateUserDto.roleIds && Array.isArray(updateUserDto.roleIds)) {
       const roles = await Promise.all(
         updateUserDto.roleIds.map(roleId => this.rolesService.findOne(roleId))
       );
       user.roles = roles;
-      delete updateUserDto.roleIds;
     }
     
-    Object.assign(user, updateUserDto);
+    // Ignore personal data fields - they should only be updated by the user themselves
+    // Personal data (name, email, phone, address) is ignored here
+    
     return await this.usersRepository.save(user);
   }
 

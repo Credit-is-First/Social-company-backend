@@ -1,9 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateBookDto } from './dto/create-book.dto';
 import { UpdateBookDto } from './dto/update-book.dto';
-import { Book } from './entities/book.entity';
+import { Book, BookStatus } from './entities/book.entity';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -15,9 +15,8 @@ export class BooksService {
   ) {}
 
   async create(createBookDto: CreateBookDto, file?: Express.Multer.File, user?: any): Promise<Book> {
-    // Auto-approve if created by admin or librarian, otherwise needs approval
-    const userRoleNames = user?.roles?.map((r: any) => r.name) || [];
-    const isAutoApproved = userRoleNames.includes('admin') || userRoleNames.includes('librarian');
+    // Auto-approve if created by user with book:approve role, otherwise needs approval
+    const isAutoApproved = user?.hasRole?.('book:approve') || false;
     
     const bookData: Partial<Book> = {
       title: createBookDto.title,
@@ -29,7 +28,7 @@ export class BooksService {
       description: createBookDto.description,
       publishedDate: createBookDto.publishedDate ? new Date(createBookDto.publishedDate) : undefined,
       isEbook: createBookDto.isEbook || false,
-      isApproved: isAutoApproved,
+      status: isAutoApproved ? BookStatus.APPROVED : BookStatus.REVIEWING,
     };
 
     if (isAutoApproved && user?.id) {
@@ -62,24 +61,41 @@ export class BooksService {
 
   async approve(id: string, userId: string): Promise<Book> {
     const book = await this.findOne(id);
-    book.isApproved = true;
+    book.status = BookStatus.APPROVED;
     book.approvedBy = userId;
     book.approvedAt = new Date();
+    book.rejectionReason = null; // Clear rejection reason when approving
+    book.deprecationReason = null; // Clear deprecation reason when approving
     return await this.booksRepository.save(book);
   }
 
-  async decline(id: string, userId: string): Promise<Book> {
+  async decline(id: string, userId: string, reason?: string): Promise<Book> {
     const book = await this.findOne(id);
-    book.isApproved = false;
+    book.status = BookStatus.DECLINED;
     book.approvedBy = userId;
     book.approvedAt = new Date();
+    book.rejectionReason = reason || null;
     return await this.booksRepository.save(book);
   }
 
-  async findAll(): Promise<Book[]> {
-    return await this.booksRepository.find({
-      order: { createdAt: 'DESC' },
-    });
+  async deprecate(id: string, userId: string, reason?: string): Promise<Book> {
+    const book = await this.findOne(id);
+    book.status = BookStatus.DEPRECATED;
+    book.approvedBy = userId;
+    book.approvedAt = new Date();
+    book.deprecationReason = reason || null;
+    book.rejectionReason = null; // Clear rejection reason when deprecating
+    return await this.booksRepository.save(book);
+  }
+
+  async findAll(excludeDeprecated: boolean = true): Promise<Book[]> {
+    const queryBuilder = this.booksRepository.createQueryBuilder('book');
+    
+    if (excludeDeprecated) {
+      queryBuilder.where('book.status != :status', { status: BookStatus.DEPRECATED });
+    }
+    
+    return await queryBuilder.orderBy('book.createdAt', 'DESC').getMany();
   }
 
   async findOne(id: string): Promise<Book> {
@@ -93,8 +109,29 @@ export class BooksService {
     return book;
   }
 
-  async update(id: string, updateBookDto: UpdateBookDto, file?: Express.Multer.File): Promise<Book> {
+  async update(id: string, updateBookDto: UpdateBookDto, file?: Express.Multer.File, requestReview?: boolean): Promise<Book> {
     const book = await this.findOne(id);
+    
+    // Prevent editing approved or reviewing books directly
+    if ((book.status === BookStatus.APPROVED || book.status === BookStatus.REVIEWING) && !requestReview) {
+      throw new BadRequestException('Cannot edit approved or reviewing books. Please deprecate the book first.');
+    }
+    
+    // Allow editing declined books - they can be edited and then request review
+    
+    // If requesting review from deprecated, working, or declined book, change status to reviewing
+    if (requestReview && (book.status === BookStatus.DEPRECATED || book.status === BookStatus.WORKING || book.status === BookStatus.DECLINED)) {
+      book.status = BookStatus.REVIEWING;
+      book.deprecationReason = null; // Clear deprecation reason when requesting review
+      book.rejectionReason = null; // Clear rejection reason when requesting review
+      book.approvedBy = null;
+      book.approvedAt = null;
+    }
+    
+    // If editing a deprecated book, change status to working
+    if (book.status === BookStatus.DEPRECATED && !requestReview) {
+      book.status = BookStatus.WORKING;
+    }
     
     if (updateBookDto.totalCopies !== undefined) {
       const difference = updateBookDto.totalCopies - book.totalCopies;
@@ -149,15 +186,88 @@ export class BooksService {
     await this.booksRepository.remove(book);
   }
 
-  async search(query: string): Promise<Book[]> {
-    return await this.booksRepository
+  async search(query: string, excludeDeprecated: boolean = true): Promise<Book[]> {
+    const queryBuilder = this.booksRepository
       .createQueryBuilder('book')
-      .where('book.title LIKE :query', { query: `%${query}%` })
-      .orWhere('book.author LIKE :query', { query: `%${query}%` })
-      .orWhere('book.isbn LIKE :query', { query: `%${query}%` })
-      .orWhere('book.category LIKE :query', { query: `%${query}%` })
-      .orderBy('book.createdAt', 'DESC')
-      .getMany();
+      .where('(book.title LIKE :query OR book.author LIKE :query OR book.isbn LIKE :query OR book.category LIKE :query)', { query: `%${query}%` });
+    
+    if (excludeDeprecated) {
+      queryBuilder.andWhere('book.status != :deprecatedStatus', { deprecatedStatus: BookStatus.DEPRECATED });
+      queryBuilder.andWhere('book.status != :workingStatus', { workingStatus: BookStatus.WORKING });
+    }
+    
+    return await queryBuilder.orderBy('book.createdAt', 'DESC').getMany();
+  }
+
+  async findWithPagination(paginationDto: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'ASC' | 'DESC';
+    status?: BookStatus;
+    title?: string;
+    author?: string;
+    isbn?: string;
+    category?: string;
+  }): Promise<{ data: Book[]; total: number; page: number; limit: number; totalPages: number }> {
+    const page = paginationDto.page || 1;
+    const limit = paginationDto.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.booksRepository.createQueryBuilder('book');
+
+    // Global search
+    if (paginationDto.search) {
+      queryBuilder.where(
+        '(book.title LIKE :search OR book.author LIKE :search OR book.isbn LIKE :search OR book.category LIKE :search)',
+        { search: `%${paginationDto.search}%` }
+      );
+    }
+
+    // Column-specific filters
+    if (paginationDto.status) {
+      queryBuilder.andWhere('book.status = :status', { status: paginationDto.status });
+    } else {
+      // Exclude deprecated and in_progress books by default unless explicitly requested
+      queryBuilder.andWhere('book.status != :deprecatedStatus', { deprecatedStatus: BookStatus.DEPRECATED });
+      queryBuilder.andWhere('book.status != :workingStatus', { workingStatus: BookStatus.WORKING });
+    }
+    if (paginationDto.title) {
+      queryBuilder.andWhere('book.title LIKE :title', { title: `%${paginationDto.title}%` });
+    }
+    if (paginationDto.author) {
+      queryBuilder.andWhere('book.author LIKE :author', { author: `%${paginationDto.author}%` });
+    }
+    if (paginationDto.isbn) {
+      queryBuilder.andWhere('book.isbn LIKE :isbn', { isbn: `%${paginationDto.isbn}%` });
+    }
+    if (paginationDto.category) {
+      queryBuilder.andWhere('book.category LIKE :category', { category: `%${paginationDto.category}%` });
+    }
+
+    // Sorting
+    const sortBy = paginationDto.sortBy || 'createdAt';
+    const sortOrder = paginationDto.sortOrder || 'DESC';
+    const validSortFields = ['title', 'author', 'isbn', 'category', 'status', 'createdAt', 'updatedAt', 'totalCopies', 'availableCopies'];
+    const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
+    queryBuilder.orderBy(`book.${finalSortBy}`, sortOrder);
+
+    // Get total count
+    const total = await queryBuilder.getCount();
+
+    // Apply pagination
+    queryBuilder.skip(skip).take(limit);
+
+    const data = await queryBuilder.getMany();
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 }
 

@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { CreateLoanDto } from './dto/create-loan.dto';
 import { UpdateLoanDto } from './dto/update-loan.dto';
 import { Loan, LoanStatus } from './entities/loan.entity';
-import { Book } from '../books/entities/book.entity';
+import { Book, BookStatus } from '../books/entities/book.entity';
 import { User } from '../users/entities/user.entity';
 
 @Injectable()
@@ -47,7 +47,7 @@ export class LoansService {
       throw new NotFoundException(`Book with ID ${bookId} not found`);
     }
 
-    if (!book.isApproved) {
+    if (book.status !== BookStatus.APPROVED) {
       throw new BadRequestException('This book is not approved yet');
     }
 
