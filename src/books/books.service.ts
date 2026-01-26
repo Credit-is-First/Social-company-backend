@@ -377,5 +377,228 @@ export class BooksService {
 
     return csvLines.join('\n');
   }
+
+  /**
+   * Parse CSV string into array of objects
+   * @param csvContent - CSV file content as string
+   * @returns Array of parsed book objects
+   */
+  private parseCSV(csvContent: string): any[] {
+    const lines = csvContent.split('\n').filter(line => line.trim() !== '');
+    if (lines.length < 2) {
+      throw new BadRequestException('CSV file must contain at least a header row and one data row');
+    }
+
+    // Parse header row
+    const headers = this.parseCSVLine(lines[0]);
+    const expectedHeaders = [
+      'Title', 'Author', 'ISBN', 'Category', 'Total Copies',
+      'Available Copies', 'Status', 'Is Ebook', 'Published Date',
+      'Description', 'Created At', 'Updated At'
+    ];
+
+    // Map headers to lowercase for case-insensitive matching
+    const headerMap: { [key: string]: string } = {};
+    headers.forEach((header, index) => {
+      const normalizedHeader = header.trim().toLowerCase();
+      headerMap[normalizedHeader] = header;
+    });
+
+    // Validate required headers
+    const requiredHeaders = ['title', 'author', 'isbn', 'category', 'total copies'];
+    for (const required of requiredHeaders) {
+      if (!headerMap[required]) {
+        throw new BadRequestException(`Missing required column: ${required}`);
+      }
+    }
+
+    // Parse data rows
+    const books: any[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const values = this.parseCSVLine(lines[i]);
+      if (values.length === 0) continue; // Skip empty rows
+
+      const book: any = {};
+      headers.forEach((header, index) => {
+        const normalizedHeader = header.trim().toLowerCase();
+        const value = values[index]?.trim() || '';
+
+        // Map headers to book properties
+        switch (normalizedHeader) {
+          case 'title':
+            book.title = value;
+            break;
+          case 'author':
+            book.author = value;
+            break;
+          case 'isbn':
+            book.isbn = value;
+            break;
+          case 'category':
+            book.category = value;
+            break;
+          case 'total copies':
+            book.totalCopies = parseInt(value, 10) || 0;
+            break;
+          case 'available copies':
+            book.availableCopies = parseInt(value, 10);
+            break;
+          case 'status':
+            book.status = value.toLowerCase();
+            break;
+          case 'is ebook':
+            book.isEbook = value.toLowerCase() === 'yes' || value.toLowerCase() === 'true' || value === '1';
+            break;
+          case 'published date':
+            book.publishedDate = value || undefined;
+            break;
+          case 'description':
+            book.description = value || undefined;
+            break;
+        }
+      });
+
+      // Validate required fields
+      if (!book.title || !book.author || !book.isbn || !book.category) {
+        throw new BadRequestException(`Row ${i + 1}: Missing required fields (Title, Author, ISBN, Category)`);
+      }
+
+      // Set defaults
+      if (book.totalCopies === undefined || isNaN(book.totalCopies)) {
+        book.totalCopies = 1;
+      }
+      if (book.availableCopies === undefined || isNaN(book.availableCopies)) {
+        // Default to totalCopies if not specified
+        book.availableCopies = book.totalCopies;
+      }
+      if (!book.status) {
+        book.status = 'reviewing';
+      }
+      // Ensure availableCopies doesn't exceed totalCopies
+      if (book.availableCopies > book.totalCopies) {
+        book.availableCopies = book.totalCopies;
+      }
+
+      books.push(book);
+    }
+
+    return books;
+  }
+
+  /**
+   * Parse a single CSV line, handling quoted values
+   * @param line - CSV line string
+   * @returns Array of field values
+   */
+  private parseCSVLine(line: string): string[] {
+    const values: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      const nextChar = line[i + 1];
+
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          // Escaped quote
+          current += '"';
+          i++; // Skip next quote
+        } else {
+          // Toggle quote state
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        // End of field
+        values.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    // Add last field
+    values.push(current);
+    return values;
+  }
+
+  /**
+   * Import books from CSV file
+   * @param csvContent - CSV file content as string
+   * @param user - Current user (for auto-approval)
+   * @returns Import result with success and error counts
+   */
+  async importFromCSV(csvContent: string, user?: any): Promise<{
+    success: number;
+    errors: number;
+    results: Array<{ row: number; book: string; status: 'success' | 'error'; message?: string }>;
+  }> {
+    const books = this.parseCSV(csvContent);
+    const results: Array<{ row: number; book: string; status: 'success' | 'error'; message?: string }> = [];
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Check if user has auto-approve permission
+    const isAutoApproved = user?.hasRole?.('book:approve') || false;
+
+    for (let i = 0; i < books.length; i++) {
+      const bookData = books[i];
+      const rowNumber = i + 2; // +2 because row 1 is header, and arrays are 0-indexed
+
+      try {
+        // Check if book with same ISBN already exists
+        const existingBook = await this.booksRepository.findOne({
+          where: { isbn: bookData.isbn },
+        });
+
+        if (existingBook) {
+          results.push({
+            row: rowNumber,
+            book: `${bookData.title} (${bookData.isbn})`,
+            status: 'error',
+            message: `Book with ISBN ${bookData.isbn} already exists`,
+          });
+          errorCount++;
+          continue;
+        }
+
+        // Create book DTO
+        const createBookDto: CreateBookDto = {
+          title: bookData.title,
+          author: bookData.author,
+          isbn: bookData.isbn,
+          category: bookData.category,
+          totalCopies: bookData.totalCopies,
+          description: bookData.description,
+          publishedDate: bookData.publishedDate,
+          isEbook: bookData.isEbook || false,
+        };
+
+        // Create book using existing create method
+        await this.create(createBookDto, undefined, user);
+
+        results.push({
+          row: rowNumber,
+          book: `${bookData.title} (${bookData.isbn})`,
+          status: 'success',
+        });
+        successCount++;
+      } catch (error: any) {
+        results.push({
+          row: rowNumber,
+          book: `${bookData.title || 'Unknown'} (${bookData.isbn || 'N/A'})`,
+          status: 'error',
+          message: error.message || 'Unknown error',
+        });
+        errorCount++;
+      }
+    }
+
+    return {
+      success: successCount,
+      errors: errorCount,
+      results,
+    };
+  }
 }
 

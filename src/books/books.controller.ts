@@ -95,6 +95,55 @@ export class BooksController {
     }
   }
 
+  @Post('import/csv')
+  @HasRoles(Roles.BOOK_CREATE)
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+    fileFilter: (req, file, cb) => {
+      // Accept CSV files
+      const allowedMimes = ['text/csv', 'application/csv', 'text/plain'];
+      const allowedExtensions = ['.csv'];
+      const fileExtension = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+      
+      if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
+        cb(null, true);
+      } else {
+        cb(new BadRequestException('Invalid file type. Only CSV files are allowed.'), false);
+      }
+    },
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB
+    },
+  }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Import books from CSV file' })
+  @ApiResponse({ status: 200, description: 'Books imported successfully' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  async importFromCSV(@UploadedFile() file: Express.Multer.File, @CurrentUser() user?: User) {
+    if (!file) {
+      throw new BadRequestException('CSV file is required');
+    }
+
+    try {
+      // Convert buffer to string
+      const csvContent = file.buffer.toString('utf-8');
+      const result = await this.booksService.importFromCSV(csvContent, user);
+      return result;
+    } catch (error: any) {
+      throw new BadRequestException(error.message || 'Error importing CSV file');
+    }
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get a book by ID (Public)' })
