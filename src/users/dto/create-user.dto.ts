@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEmail, IsOptional, IsArray, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, IsOptional, IsArray, IsUUID, MinLength } from 'class-validator';
 
 export class CreateUserDto {
   @ApiProperty()
@@ -17,6 +17,12 @@ export class CreateUserDto {
   @IsNotEmpty()
   phone: string;
 
+  /** Initial password. The account holder should change it after first sign-in. */
+  @ApiProperty({ minLength: 8 })
+  @IsString()
+  @MinLength(8)
+  password: string;
+
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()
@@ -27,5 +33,11 @@ export class CreateUserDto {
   @IsArray()
   @IsUUID('4', { each: true })
   roleIds?: string[];
+
+  @ApiPropertyOptional({ type: [String], description: 'Defaults to the User group when omitted.' })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  groupIds?: string[];
 }
 

@@ -3,6 +3,7 @@ import { Loan } from '../../loans/entities/loan.entity';
 import { Role } from '../../roles/entities/role.entity';
 import { Group } from '../../groups/entities/group.entity';
 import { ApiProperty } from '@nestjs/swagger';
+import { Exclude } from 'class-transformer';
 
 @Entity('users')
 export class User {
@@ -26,15 +27,17 @@ export class User {
   @Column({ type: 'text', nullable: true })
   address: string;
 
-  @ApiProperty({ required: false })
+  // The three fields below are secrets. @Exclude() keeps them out of every
+  // serialised response via the global ClassSerializerInterceptor.
+  @Exclude()
   @Column({ nullable: true })
   password: string;
 
-  @ApiProperty({ required: false })
+  @Exclude()
   @Column({ type: 'text', nullable: true })
   securityQuestion: string;
 
-  @ApiProperty({ required: false })
+  @Exclude()
   @Column({ type: 'text', nullable: true })
   securityAnswer: string;
 

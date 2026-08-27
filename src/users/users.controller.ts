@@ -1,7 +1,13 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
+
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { BlockUserDto } from './dto/block-user.dto';
+import { ResetUserPasswordDto } from './dto/reset-user-password.dto';
+import { UpdateUserRolesDto } from './dto/update-user-roles.dto';
+import { UpdateUserGroupsDto } from './dto/update-user-groups.dto';
 import { User } from './entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -14,6 +20,15 @@ import { Roles } from '../roles/roles.constants';
 @ApiBearerAuth()
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Post()
+  @HasRoles(Roles.USER_CREATE)
+  @ApiOperation({ summary: 'Create a user account on someone\'s behalf' })
+  @ApiResponse({ status: 201, description: 'User created successfully', type: User })
+  @ApiResponse({ status: 409, description: 'Email already exists' })
+  create(@Body() createUserDto: CreateUserDto) {
+    return this.usersService.create(createUserDto);
+  }
 
   @Get()
   @HasRoles(Roles.USER_READ)
@@ -47,7 +62,7 @@ export class UsersController {
   @HasRoles(Roles.USER_BLOCK)
   @ApiOperation({ summary: 'Block or unblock a user' })
   @ApiResponse({ status: 200, description: 'User block status updated successfully', type: User })
-  blockUser(@Param('id') id: string, @Body() body: { blocked: boolean }) {
+  blockUser(@Param('id') id: string, @Body() body: BlockUserDto) {
     return this.usersService.blockUser(id, body.blocked);
   }
 
@@ -55,7 +70,7 @@ export class UsersController {
   @HasRoles(Roles.USER_RESET_PASSWORD)
   @ApiOperation({ summary: 'Reset user password' })
   @ApiResponse({ status: 200, description: 'User password reset successfully', type: User })
-  resetPassword(@Param('id') id: string, @Body() body: { newPassword: string }) {
+  resetPassword(@Param('id') id: string, @Body() body: ResetUserPasswordDto) {
     return this.usersService.resetUserPassword(id, body.newPassword);
   }
 
@@ -63,7 +78,7 @@ export class UsersController {
   @HasRoles(Roles.USER_ROLE_UPDATE)
   @ApiOperation({ summary: 'Update user roles' })
   @ApiResponse({ status: 200, description: 'User roles updated successfully', type: User })
-  updateRoles(@Param('id') id: string, @Body() body: { roleIds: string[] }) {
+  updateRoles(@Param('id') id: string, @Body() body: UpdateUserRolesDto) {
     return this.usersService.updateUserRoles(id, body.roleIds);
   }
 
@@ -71,7 +86,7 @@ export class UsersController {
   @HasRoles(Roles.USER_ROLE_UPDATE)
   @ApiOperation({ summary: 'Update user groups' })
   @ApiResponse({ status: 200, description: 'User groups updated successfully', type: User })
-  updateGroups(@Param('id') id: string, @Body() body: { groupIds: string[] }) {
+  updateGroups(@Param('id') id: string, @Body() body: UpdateUserGroupsDto) {
     return this.usersService.updateUserGroups(id, body.groupIds);
   }
 
