@@ -1,0 +1,400 @@
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { LoansService } from './loans.service';
+import { Loan, LoanStatus } from './entities/loan.entity';
+import { Book, BookStatus } from '../books/entities/book.entity';
+import { User } from '../users/entities/user.entity';
+
+/**
+ * These tests pin the invariant the whole lending flow rests on:
+ * availableCopies moves exactly once when a loan starts holding a copy and
+ * exactly once when it stops, and never at any other time.
+ */
+
+const BOOK_ID = 'book-1';
+const USER_ID = 'user-1';
+
+interface World {
+  books: { [id: string]: Book };
+  users: { [id: string]: User };
+  loans: { [id: string]: Loan };
+}
+
+function makeBook(overrides: Partial<Book> = {}): Book {
+  return {
+    id: BOOK_ID,
+    title: 'Test Book',
+    status: BookStatus.APPROVED,
+    totalCopies: 2,
+    availableCopies: 2,
+    ...overrides,
+  } as Book;
+}
+
+function makeLoan(overrides: Partial<Loan> = {}): Loan {
+  return {
+    id: 'loan-1',
+    bookId: BOOK_ID,
+    userId: USER_ID,
+    status: LoanStatus.PENDING,
+    borrowDate: new Date('2026-01-01'),
+    dueDate: new Date('2026-01-15'),
+    returnDate: null,
+    ...overrides,
+  } as Loan;
+}
+
+function buildService(world: World) {
+  let created = 0;
+
+  const manager: any = {
+    findOne: jest.fn(async (entity: any, second?: any) => {
+      if (entity === Book) return world.books[second] || null;
+      if (entity === User) return world.users[second] || null;
+      if (entity === Loan) {
+        if (typeof second === 'string') return world.loans[second] || null;
+        // The open-loan lookup passes { where: [ {...}, ... ] }
+        const clauses = (second && second.where) || [];
+        return (
+          Object.keys(world.loans)
+            .map(id => world.loans[id])
+            .find(loan =>
+              clauses.some(
+                (clause: any) =>
+                  clause.userId === loan.userId &&
+                  clause.bookId === loan.bookId &&
+                  clause.status === loan.status,
+              ),
+            ) || null
+        );
+      }
+      return null;
+    }),
+    save: jest.fn(async (entity: any, value: any) => {
+      if (entity === Book) world.books[value.id] = value;
+      if (entity === Loan) {
+        if (!value.id) value.id = `loan-new-${++created}`;
+        world.loans[value.id] = value;
+      }
+      return value;
+    }),
+    create: jest.fn((entity: any, data: any) => ({ ...data })),
+    remove: jest.fn(async (entity: any, value: any) => {
+      if (entity === Loan) delete world.loans[value.id];
+      return value;
+    }),
+  };
+
+  const loansRepository: any = {
+    findOne: jest.fn(async (options: any) => world.loans[options.where.id] || null),
+    save: jest.fn(async (value: any) => {
+      world.loans[value.id] = value;
+      return value;
+    }),
+    find: jest.fn(async () => []),
+  };
+
+  const connection: any = {
+    transaction: jest.fn(async (cb: any) => cb(manager)),
+  };
+
+  const service = new LoansService(loansRepository, {} as any, {} as any, connection);
+  return { service, manager, loansRepository };
+}
+
+function freshWorld(bookOverrides: Partial<Book> = {}): World {
+  return {
+    books: { [BOOK_ID]: makeBook(bookOverrides) },
+    users: { [USER_ID]: { id: USER_ID, name: 'Borrower' } as User },
+    loans: {},
+  };
+}
+
+describe('LoansService copy accounting', () => {
+  describe('createForUser (borrower request)', () => {
+    it('creates a pending loan without reserving a copy', async () => {
+      const world = freshWorld();
+      const { service } = buildService(world);
+
+      const loan = await service.createForUser(USER_ID, BOOK_ID);
+
+      expect(loan.status).toBe(LoanStatus.PENDING);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('refuses a book that is not approved', async () => {
+      const world = freshWorld({ status: BookStatus.REVIEWING });
+      const { service } = buildService(world);
+
+      await expect(service.createForUser(USER_ID, BOOK_ID)).rejects.toBeInstanceOf(BadRequestException);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('refuses when no copies are available', async () => {
+      const world = freshWorld({ availableCopies: 0 });
+      const { service } = buildService(world);
+
+      await expect(service.createForUser(USER_ID, BOOK_ID)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses a second open request for the same book', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      await expect(service.createForUser(USER_ID, BOOK_ID)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses an unknown book', async () => {
+      const world = freshWorld();
+      const { service } = buildService(world);
+
+      await expect(service.createForUser(USER_ID, 'nope')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('approve', () => {
+    it('reserves exactly one copy', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      const loan = await service.approve('loan-1');
+
+      expect(loan.status).toBe(LoanStatus.ACTIVE);
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('does not double-decrement when approving twice', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      await service.approve('loan-1');
+      await expect(service.approve('loan-1')).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('refuses when the last copy went while the request was pending', async () => {
+      const world = freshWorld({ availableCopies: 0 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      await expect(service.approve('loan-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(world.books[BOOK_ID].availableCopies).toBe(0);
+    });
+  });
+
+  describe('returnLoan', () => {
+    it('releases the copy and records a return date', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      const loan = await service.returnLoan('loan-1');
+
+      expect(loan.status).toBe(LoanStatus.RETURNED);
+      expect(loan.returnDate).toBeInstanceOf(Date);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('releases the copy for an overdue loan too', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.OVERDUE });
+      const { service } = buildService(world);
+
+      await service.returnLoan('loan-1');
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('refuses to return a pending request', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      await expect(service.returnLoan('loan-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('never pushes availableCopies above totalCopies', async () => {
+      const world = freshWorld({ availableCopies: 2, totalCopies: 2 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await service.returnLoan('loan-1');
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+  });
+
+  describe('create (staff issues a loan directly)', () => {
+    it('issues an active loan and takes a copy', async () => {
+      const world = freshWorld();
+      const { service } = buildService(world);
+
+      const loan = await service.create({
+        bookId: BOOK_ID,
+        userId: USER_ID,
+        borrowDate: '2026-01-01',
+        dueDate: '2026-01-15',
+      });
+
+      expect(loan.status).toBe(LoanStatus.ACTIVE);
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('rejects a due date before the borrow date', async () => {
+      const world = freshWorld();
+      const { service } = buildService(world);
+
+      await expect(
+        service.create({
+          bookId: BOOK_ID,
+          userId: USER_ID,
+          borrowDate: '2026-02-01',
+          dueDate: '2026-01-01',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('rejects an unapproved book', async () => {
+      const world = freshWorld({ status: BookStatus.DECLINED });
+      const { service } = buildService(world);
+
+      await expect(
+        service.create({
+          bookId: BOOK_ID,
+          userId: USER_ID,
+          borrowDate: '2026-01-01',
+          dueDate: '2026-01-15',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('update', () => {
+    it('treats a return date on an active loan as a return', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      const loan = await service.update('loan-1', { returnDate: '2026-01-10' });
+
+      expect(loan.status).toBe(LoanStatus.RETURNED);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('releases the copy when the status leaves active without a return date', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await service.update('loan-1', { status: LoanStatus.RETURNED });
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('takes a copy when a pending loan is switched to active', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      await service.update('loan-1', { status: LoanStatus.ACTIVE });
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('does not move the count when the status is unchanged', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await service.update('loan-1', { status: LoanStatus.ACTIVE });
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+  });
+
+  describe('remove and cancel', () => {
+    it('releases the copy when deleting an active loan', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await service.remove('loan-1');
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+      expect(world.loans['loan-1']).toBeUndefined();
+    });
+
+    it('does not invent a copy when deleting a pending loan', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service } = buildService(world);
+
+      await service.remove('loan-1');
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('does not invent a copy when deleting a returned loan', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.RETURNED });
+      const { service } = buildService(world);
+
+      await service.remove('loan-1');
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('refuses to cancel someone else\'s loan', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await expect(service.cancelUserLoan('someone-else', 'loan-1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('releases the copy when the owner cancels an active loan', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await service.cancelUserLoan(USER_ID, 'loan-1');
+
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('refuses to cancel an already returned loan', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.RETURNED });
+      const { service } = buildService(world);
+
+      await expect(service.cancelUserLoan(USER_ID, 'loan-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+  });
+
+  describe('full lifecycle', () => {
+    it('returns the count to its starting value', async () => {
+      const world = freshWorld();
+      const { service } = buildService(world);
+
+      const request = await service.createForUser(USER_ID, BOOK_ID);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+
+      await service.approve(request.id);
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+
+      await service.returnLoan(request.id);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+  });
+});
