@@ -3,13 +3,28 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { classToPlain } from 'class-transformer';
 import { User } from '../users/entities/user.entity';
 import { GroupsService } from '../groups/groups.service';
-import { RolesService } from '../roles/roles.service';
+import { SUPER_ADMIN_GROUP, DEFAULT_MEMBER_GROUP } from '../roles/roles.constants';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { RefreshTokenService } from './refresh-token.service';
+
+/**
+ * The internal shape of a freshly minted session.
+ *
+ * The refresh token never reaches the response body — the controller puts it in
+ * an httpOnly cookie, so page script cannot read it even if the page is XSSed.
+ */
+export interface AuthSession {
+  user: Record<string, any>;
+  accessToken: string;
+  refreshToken: string;
+  refreshExpiresAt: Date;
+}
 
 @Injectable()
 export class AuthService {
@@ -18,10 +33,41 @@ export class AuthService {
     private usersRepository: Repository<User>,
     private jwtService: JwtService,
     private groupsService: GroupsService,
-    private rolesService: RolesService,
+    private refreshTokenService: RefreshTokenService,
   ) {}
 
-  async register(registerDto: RegisterDto): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>> {
+  /** Direct roles plus every role inherited from the user's groups. */
+  private roleNamesFor(user: User): string[] {
+    const directRoleNames = user.roles?.map(r => r.name) || [];
+    const groupRoleNames = (user.groups || []).reduce<string[]>((acc, g) => {
+      return acc.concat(g.roles?.map(r => r.name) || []);
+    }, []);
+    return Array.from(new Set(directRoleNames.concat(groupRoleNames)));
+  }
+
+  /** Builds the access token + a freshly rotated refresh token for a user. */
+  private async issueSession(user: User): Promise<AuthSession> {
+    const payload = {
+      email: user.email,
+      sub: user.id,
+      roles: this.roleNamesFor(user),
+      groups: (user.groups || []).map(g => g.name),
+    };
+
+    const refresh = await this.refreshTokenService.issue(user.id);
+
+    return {
+      user: classToPlain(user),
+      accessToken: this.jwtService.sign(payload),
+      refreshToken: refresh.token,
+      refreshExpiresAt: refresh.expiresAt,
+    };
+  }
+
+  // These methods return the User entity itself. Secrets are stripped centrally
+  // by the @Exclude() decorators plus the global ClassSerializerInterceptor;
+  // hand-destructuring here used to miss securityQuestion.
+  async register(registerDto: RegisterDto): Promise<User> {
     const existingUser = await this.usersRepository.findOne({ where: { email: registerDto.email } });
     if (existingUser) {
       throw new BadRequestException('Email already exists');
@@ -33,20 +79,20 @@ export class AuthService {
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
     const hashedAnswer = await bcrypt.hash(registerDto.securityAnswer.toLowerCase(), 10);
 
-    // Check if this is the first user (setup) - assign super admin group
+    // The very first account bootstraps the system as super admin; everyone
+    // else lands in the default member group, which carries the permission to
+    // request loans. Previously they were created with no group at all and so
+    // could not do anything until an administrator intervened.
     const userCount = await this.usersRepository.count();
     const isFirstUser = userCount === 0;
+    const groupName = isFirstUser ? SUPER_ADMIN_GROUP : DEFAULT_MEMBER_GROUP;
 
-    let group = null;
-    if (isFirstUser) {
-      // Assign super admin group to first user (setup)
-      group = await this.groupsService.findByName('Super Admin');
-      if (!group) {
-        throw new BadRequestException('Super Admin group not found. Please ensure default groups are initialized.');
-      }
+    const group = await this.groupsService.findByName(groupName);
+    if (!group) {
+      throw new BadRequestException(
+        `${groupName} group not found. Please ensure default groups are initialized.`,
+      );
     }
-    // For subsequent users, they will be created without groups
-    // Groups and roles can be assigned later by administrators
 
     const user = this.usersRepository.create({
       name: registerDto.name,
@@ -60,14 +106,11 @@ export class AuthService {
       securityQuestion: registerDto.securityQuestion,
     });
 
-    const savedUser = await this.usersRepository.save(user);
-    const { password, securityAnswer, ...userWithoutSensitive } = savedUser;
-
-    return userWithoutSensitive;
+    return await this.usersRepository.save(user);
   }
 
-  async login(loginDto: LoginDto): Promise<{ user: Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>; access_token: string }> {
-    const user = await this.usersRepository.findOne({ 
+  async login(loginDto: LoginDto): Promise<AuthSession> {
+    const user = await this.usersRepository.findOne({
       where: { email: loginDto.email },
       relations: ['groups', 'groups.roles', 'roles']
     });
@@ -84,23 +127,50 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const { password, securityAnswer, ...userWithoutSensitive } = user;
-    const groupNames = user.groups?.map(g => g.name) || [];
-    // Get all role names (direct roles + roles from groups)
-    const directRoleNames = user.roles?.map(r => r.name) || [];
-    const groupRoleNames = (user.groups || []).reduce<string[]>((acc, g) => {
-      const roleNames = g.roles?.map(r => r.name) || [];
-      return acc.concat(roleNames);
-    }, []);
-    const roleNames = [...new Set([...directRoleNames, ...groupRoleNames])];
+    // Cheap housekeeping on a naturally infrequent operation.
+    await this.refreshTokenService.purgeExpired();
 
-    const payload = { email: user.email, sub: user.id, roles: roleNames, groups: groupNames };
-    const access_token = this.jwtService.sign(payload);
+    return await this.issueSession(user);
+  }
 
-    return {
-      user: userWithoutSensitive,
-      access_token,
-    };
+  /**
+   * Exchanges a refresh token for a new session. The presented token is
+   * consumed, so each one works exactly once.
+   */
+  async refreshSession(refreshToken: string): Promise<AuthSession> {
+    const userId = await this.refreshTokenService.consume(refreshToken);
+
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      relations: ['groups', 'groups.roles', 'roles'],
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    if (user.blocked) {
+      // Revoke the family too, so a blocked account cannot keep cycling tokens.
+      await this.refreshTokenService.revokeAllForUser(user.id);
+      throw new UnauthorizedException('Your account has been blocked. Please contact an administrator.');
+    }
+
+    return await this.issueSession(user);
+  }
+
+  async logout(refreshToken: string): Promise<{ message: string }> {
+    await this.refreshTokenService.revoke(refreshToken);
+    return { message: 'Signed out successfully' };
+  }
+
+  /** The security question is needed to answer it, so it is readable by email. */
+  async getSecurityQuestion(email: string): Promise<{ securityQuestion: string }> {
+    const user = await this.usersRepository.findOne({ where: { email } });
+
+    if (!user || !user.securityQuestion) {
+      throw new NotFoundException('No security question is set for that email address');
+    }
+
+    return { securityQuestion: user.securityQuestion };
   }
 
   async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<{ message: string }> {
@@ -126,10 +196,21 @@ export class AuthService {
     user.password = hashedPassword;
     await this.usersRepository.save(user);
 
+    // Any session established with the old password is no longer trustworthy.
+    await this.refreshTokenService.revokeAllForUser(user.id);
+
     return { message: 'Password reset successfully' };
   }
 
-  async changePassword(userId: string, changePasswordDto: ChangePasswordDto): Promise<{ message: string }> {
+  /**
+   * Returns a replacement refresh token alongside the confirmation: every
+   * existing session is revoked, then the caller's own device is re-issued one
+   * so changing your password signs out your *other* devices, not this one.
+   */
+  async changePassword(
+    userId: string,
+    changePasswordDto: ChangePasswordDto,
+  ): Promise<{ message: string; refresh: { token: string; expiresAt: Date } }> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user || !user.password) {
       throw new NotFoundException('User not found');
@@ -144,10 +225,13 @@ export class AuthService {
     user.password = hashedPassword;
     await this.usersRepository.save(user);
 
-    return { message: 'Password changed successfully' };
+    await this.refreshTokenService.revokeAllForUser(user.id);
+    const refresh = await this.refreshTokenService.issue(user.id);
+
+    return { message: 'Password changed successfully', refresh };
   }
 
-  async updateProfile(userId: string, updateData: { name?: string; phone?: string; address?: string }): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>> {
+  async updateProfile(userId: string, updateData: { name?: string; phone?: string; address?: string }): Promise<User> {
     const user = await this.usersRepository.findOne({ 
       where: { id: userId },
       relations: ['roles']
@@ -160,9 +244,7 @@ export class AuthService {
     if (updateData.phone !== undefined) user.phone = updateData.phone;
     if (updateData.address !== undefined) user.address = updateData.address;
 
-    const updatedUser = await this.usersRepository.save(user);
-    const { password, securityAnswer, ...userWithoutSensitive } = updatedUser;
-    return userWithoutSensitive;
+    return await this.usersRepository.save(user);
   }
 
   async validateUser(userId: string): Promise<User> {
@@ -179,22 +261,21 @@ export class AuthService {
     return user;
   }
 
-  async setupSuperAdmin(registerDto: RegisterDto): Promise<Omit<User, 'password' | 'securityAnswer' | 'hasRole' | 'getAllRoleNames'>> {
+  async setupSuperAdmin(registerDto: RegisterDto): Promise<User> {
     // Check if setup is already complete
     const userCount = await this.usersRepository.count();
     if (userCount > 0) {
       throw new BadRequestException('Setup already completed. Super admin account already exists.');
     }
 
-    // Ensure default groups and roles exist
+    // Seeds roles first, then the default groups that reference them.
     await this.groupsService.ensureDefaultGroupsExist();
-    await this.rolesService.ensureRolesExist();
 
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
     const hashedAnswer = await bcrypt.hash(registerDto.securityAnswer.toLowerCase(), 10);
 
     // Get Super Admin group
-    const superAdminGroup = await this.groupsService.findByName('Super Admin');
+    const superAdminGroup = await this.groupsService.findByName(SUPER_ADMIN_GROUP);
     if (!superAdminGroup) {
       throw new BadRequestException('Super Admin group not found. Please ensure default groups are initialized.');
     }
@@ -211,10 +292,7 @@ export class AuthService {
       securityQuestion: registerDto.securityQuestion,
     });
 
-    const savedUser = await this.usersRepository.save(user);
-    const { password, securityAnswer, ...userWithoutSensitive } = savedUser;
-
-    return userWithoutSensitive;
+    return await this.usersRepository.save(user);
   }
 }
 

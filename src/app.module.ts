@@ -1,6 +1,7 @@
-import { Module } from '@nestjs/common';
+import { env } from './config/env';
+import { Module, ClassSerializerInterceptor } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { BooksModule } from './books/books.module';
 import { UsersModule } from './users/users.module';
 import { LoansModule } from './loans/loans.module';
@@ -13,21 +14,27 @@ import { User } from './users/entities/user.entity';
 import { Loan } from './loans/entities/loan.entity';
 import { Role } from './roles/entities/role.entity';
 import { Group } from './groups/entities/group.entity';
+import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './auth/guards/roles.guard';
+import { RateLimitGuard } from './common/guards/rate-limit.guard';
+import { join } from 'path';
 
 @Module({
   imports: [
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: 'localhost',
-      port: 3306,
-      username: 'root',
-      password: '',
-      database: 'library_db',
-      entities: [Book, User, Loan, Role, Group],
-      synchronize: true, // Set to false in production
-      logging: true,
+      host: env.database.host,
+      port: env.database.port,
+      username: env.database.username,
+      password: env.database.password,
+      database: env.database.name,
+      entities: [Book, User, Loan, Role, Group, RefreshToken],
+      // Glob covers both the compiled output and ts-node runs (npm run seed).
+      migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
+      migrationsRun: env.database.migrationsRun,
+      synchronize: env.database.synchronize,
+      logging: env.database.logging,
     }),
     AuthModule,
     GroupsModule,
@@ -39,6 +46,12 @@ import { RolesGuard } from './auth/guards/roles.guard';
   ],
   providers: [
     {
+      // Registered first so a flood of unauthenticated requests is rejected
+      // before any password hashing or database work happens.
+      provide: APP_GUARD,
+      useClass: RateLimitGuard,
+    },
+    {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
     },
@@ -46,7 +59,12 @@ import { RolesGuard } from './auth/guards/roles.guard';
       provide: APP_GUARD,
       useClass: RolesGuard,
     },
+    {
+      // Applies the @Exclude() rules on entities to every response, so secrets
+      // like password hashes can never be serialised out by accident.
+      provide: APP_INTERCEPTOR,
+      useClass: ClassSerializerInterceptor,
+    },
   ],
 })
 export class AppModule {}
-
