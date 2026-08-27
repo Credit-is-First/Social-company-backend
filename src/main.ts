@@ -1,26 +1,16 @@
+import { env } from './config/env';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  
-  // Enable CORS for frontend (multiple origins)
-  app.enableCors({
-    origin: [
-      // 'http://localhost:5000',
-      // 'http://localhost:3000',
-      // 'http://localhost:3001',
-    ],
-    credentials: true,
-  });
+  const app = await NestFactory.create(AppModule);
 
-  // Serve static files
-  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-    prefix: '/uploads/',
+  // Only the configured frontend origins may call this API from a browser.
+  app.enableCors({
+    origin: env.corsOrigins,
+    credentials: true,
   });
 
   // Global validation pipe
@@ -32,22 +22,26 @@ async function bootstrap() {
     },
   }));
 
-  // Swagger configuration
-  const config = new DocumentBuilder()
-    .setTitle('Library Management API')
-    .setDescription('Electronic Library Management System API Documentation')
-    .setVersion('1.0')
-    .addTag('books')
-    .addTag('users')
-    .addTag('loans')
-    .build();
-  
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document);
+  // Swagger exposes the full API surface, so keep it out of production.
+  if (!env.isProduction) {
+    const config = new DocumentBuilder()
+      .setTitle('Library Management API')
+      .setDescription('Electronic Library Management System API Documentation')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .addTag('books')
+      .addTag('users')
+      .addTag('loans')
+      .build();
 
-  await app.listen(5001);
-  console.log('Application is running on: http://localhost:5001');
-  console.log('Swagger documentation: http://localhost:5001/api');
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api', app, document);
+  }
+
+  await app.listen(env.port);
+  console.log(`Application is running on: http://localhost:${env.port}`);
+  if (!env.isProduction) {
+    console.log(`Swagger documentation: http://localhost:${env.port}/api`);
+  }
 }
 bootstrap();
-

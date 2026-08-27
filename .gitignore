@@ -36,3 +36,8 @@ lerna-debug.log*
 
 uploads/*
 temp_data/*
+
+# Secrets
+.env
+.env.local
+!.env.example
