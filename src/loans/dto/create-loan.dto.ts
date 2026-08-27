@@ -12,14 +12,17 @@ export class CreateLoanDto {
   @IsNotEmpty()
   userId: string;
 
-  @ApiProperty()
+  // Typed as string, not Date: the global ValidationPipe runs with
+  // enableImplicitConversion, which would coerce these to Date objects before
+  // validation and make @IsDateString reject every request.
+  @ApiProperty({ example: '2026-01-31' })
   @IsDateString()
   @IsNotEmpty()
-  borrowDate: Date;
+  borrowDate: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: '2026-02-14' })
   @IsDateString()
   @IsNotEmpty()
-  dueDate: Date;
+  dueDate: string;
 }
 

@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { LoansService } from './loans.service';
 import { CreateLoanDto } from './dto/create-loan.dto';
 import { UpdateLoanDto } from './dto/update-loan.dto';
+import { BorrowBookDto } from './dto/borrow-book.dto';
 import { Loan } from './entities/loan.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -20,7 +21,7 @@ export class LoansController {
 
   @Post()
   @HasRoles(Roles.BOOK_LENDING_APPROVE)
-  @ApiOperation({ summary: 'Create a new loan' })
+  @ApiOperation({ summary: 'Create a loan on a borrower\'s behalf (issued immediately)' })
   @ApiResponse({ status: 201, description: 'Loan created successfully', type: Loan })
   create(@Body() createLoanDto: CreateLoanDto) {
     return this.loansService.create(createLoanDto);
@@ -30,7 +31,7 @@ export class LoansController {
   @HasRoles(Roles.BOOK_LENDING_REQUEST)
   @ApiOperation({ summary: 'Request to borrow a book (for current user)' })
   @ApiResponse({ status: 201, description: 'Book borrowing requested successfully', type: Loan })
-  borrow(@CurrentUser() user: User, @Body() body: { bookId: string }) {
+  borrow(@CurrentUser() user: User, @Body() body: BorrowBookDto) {
     return this.loansService.createForUser(user.id, body.bookId);
   }
 
@@ -63,6 +64,14 @@ export class LoansController {
     return this.loansService.getActiveLoans();
   }
 
+  @Get('pending')
+  @HasRoles(Roles.BOOK_LENDING_READ)
+  @ApiOperation({ summary: 'Get loan requests awaiting approval' })
+  @ApiResponse({ status: 200, description: 'List of pending loans', type: [Loan] })
+  getPendingLoans() {
+    return this.loansService.getPendingLoans();
+  }
+
   @Get(':id')
   @HasRoles(Roles.BOOK_LENDING_READ)
   @ApiOperation({ summary: 'Get a loan by ID' })
@@ -88,9 +97,17 @@ export class LoansController {
     return this.loansService.decline(id);
   }
 
+  @Patch(':id/return')
+  @HasRoles(Roles.BOOK_LENDING_APPROVE)
+  @ApiOperation({ summary: 'Mark a loan as returned and release the copy' })
+  @ApiResponse({ status: 200, description: 'Loan returned successfully', type: Loan })
+  returnLoan(@Param('id') id: string) {
+    return this.loansService.returnLoan(id);
+  }
+
   @Patch(':id')
   @HasRoles(Roles.BOOK_LENDING_APPROVE)
-  @ApiOperation({ summary: 'Update a loan (e.g., return book)' })
+  @ApiOperation({ summary: 'Update a loan status or return date' })
   @ApiResponse({ status: 200, description: 'Loan updated successfully', type: Loan })
   update(@Param('id') id: string, @Body() updateLoanDto: UpdateLoanDto) {
     return this.loansService.update(id, updateLoanDto);
@@ -111,4 +128,3 @@ export class LoansController {
     return this.loansService.remove(id);
   }
 }
-

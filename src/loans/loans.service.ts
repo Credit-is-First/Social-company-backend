@@ -1,11 +1,22 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { InjectRepository, InjectConnection } from '@nestjs/typeorm';
+import { Repository, Connection, EntityManager } from 'typeorm';
 import { CreateLoanDto } from './dto/create-loan.dto';
 import { UpdateLoanDto } from './dto/update-loan.dto';
 import { Loan, LoanStatus } from './entities/loan.entity';
 import { Book, BookStatus } from '../books/entities/book.entity';
 import { User } from '../users/entities/user.entity';
+
+const DEFAULT_LOAN_DAYS = 14;
+
+/**
+ * A loan holds one physical copy for exactly as long as it is out with the
+ * borrower. availableCopies is adjusted on every transition across this
+ * boundary and nowhere else, which is what keeps the count consistent.
+ */
+function holdsCopy(status: LoanStatus): boolean {
+  return status === LoanStatus.ACTIVE || status === LoanStatus.OVERDUE;
+}
 
 @Injectable()
 export class LoansService {
@@ -16,109 +27,255 @@ export class LoansService {
     private booksRepository: Repository<Book>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectConnection()
+    private connection: Connection,
   ) {}
 
-  async create(createLoanDto: CreateLoanDto): Promise<Loan> {
-    const book = await this.booksRepository.findOne({ where: { id: createLoanDto.bookId } });
-    if (!book) {
-      throw new NotFoundException(`Book with ID ${createLoanDto.bookId} not found`);
-    }
+  // ---------------------------------------------------------------------------
+  // Copy accounting
+  // ---------------------------------------------------------------------------
 
-    if (book.availableCopies <= 0) {
-      throw new BadRequestException('No available copies of this book');
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: createLoanDto.userId } });
-    if (!user) {
-      throw new NotFoundException(`User with ID ${createLoanDto.userId} not found`);
-    }
-
-    // Decrease available copies
-    book.availableCopies -= 1;
-    await this.booksRepository.save(book);
-
-    const loan = this.loansRepository.create(createLoanDto);
-    return await this.loansRepository.save(loan);
-  }
-
-  async createForUser(userId: string, bookId: string): Promise<Loan> {
-    const book = await this.booksRepository.findOne({ where: { id: bookId } });
+  /**
+   * Moves availableCopies by `delta` under a row lock, so two concurrent
+   * borrows of the last copy cannot both succeed.
+   */
+  private async adjustAvailableCopies(
+    manager: EntityManager,
+    bookId: string,
+    delta: number,
+  ): Promise<Book> {
+    const book = await manager.findOne(Book, bookId, {
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!book) {
       throw new NotFoundException(`Book with ID ${bookId} not found`);
     }
 
-    if (book.status !== BookStatus.APPROVED) {
-      throw new BadRequestException('This book is not approved yet');
-    }
-
-    if (book.availableCopies <= 0) {
+    const next = book.availableCopies + delta;
+    if (next < 0) {
       throw new BadRequestException('No available copies of this book');
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException(`User with ID ${userId} not found`);
-    }
+    book.availableCopies = Math.min(next, book.totalCopies);
+    await manager.save(Book, book);
+    return book;
+  }
 
-    // Check if user already has a pending or active loan for this book
-    const existingLoan = await this.loansRepository.findOne({
+  private async assertBorrowable(manager: EntityManager, bookId: string): Promise<Book> {
+    const book = await manager.findOne(Book, bookId);
+    if (!book) {
+      throw new NotFoundException(`Book with ID ${bookId} not found`);
+    }
+    if (book.status !== BookStatus.APPROVED) {
+      throw new BadRequestException('This book is not approved for lending');
+    }
+    return book;
+  }
+
+  private async assertNoOpenLoan(manager: EntityManager, userId: string, bookId: string): Promise<void> {
+    const existingLoan = await manager.findOne(Loan, {
       where: [
         { userId, bookId, status: LoanStatus.ACTIVE },
+        { userId, bookId, status: LoanStatus.OVERDUE },
         { userId, bookId, status: LoanStatus.PENDING },
       ],
     });
     if (existingLoan) {
-      throw new BadRequestException('You already have a pending or active loan for this book');
+      throw new BadRequestException('There is already a pending or active loan for this book and user');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Commands
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Staff-initiated loan: the book is handed over immediately, so it is created
+   * ACTIVE and takes its copy at once. (It used to be created PENDING while
+   * still decrementing, so approving it decremented a second time.)
+   */
+  async create(createLoanDto: CreateLoanDto): Promise<Loan> {
+    const borrowDate = new Date(createLoanDto.borrowDate);
+    const dueDate = new Date(createLoanDto.dueDate);
+    if (dueDate < borrowDate) {
+      throw new BadRequestException('Due date cannot be earlier than the borrow date');
     }
 
-    const today = new Date();
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + 14); // 14 days loan period
+    return await this.connection.transaction(async manager => {
+      await this.assertBorrowable(manager, createLoanDto.bookId);
 
-    // Create loan with pending status (needs approval)
-    const loan = this.loansRepository.create({
-      bookId,
-      userId,
-      borrowDate: today,
-      dueDate,
-      status: LoanStatus.PENDING,
+      const user = await manager.findOne(User, createLoanDto.userId);
+      if (!user) {
+        throw new NotFoundException(`User with ID ${createLoanDto.userId} not found`);
+      }
+
+      await this.assertNoOpenLoan(manager, createLoanDto.userId, createLoanDto.bookId);
+      await this.adjustAvailableCopies(manager, createLoanDto.bookId, -1);
+
+      const loan = manager.create(Loan, {
+        bookId: createLoanDto.bookId,
+        userId: createLoanDto.userId,
+        borrowDate,
+        dueDate,
+        status: LoanStatus.ACTIVE,
+      });
+      return await manager.save(Loan, loan);
     });
-    return await this.loansRepository.save(loan);
+  }
+
+  /** Borrower-initiated request: no copy is taken until staff approve it. */
+  async createForUser(userId: string, bookId: string): Promise<Loan> {
+    if (!bookId) {
+      throw new BadRequestException('bookId is required');
+    }
+
+    return await this.connection.transaction(async manager => {
+      const book = await this.assertBorrowable(manager, bookId);
+      if (book.availableCopies <= 0) {
+        throw new BadRequestException('No available copies of this book');
+      }
+
+      const user = await manager.findOne(User, userId);
+      if (!user) {
+        throw new NotFoundException(`User with ID ${userId} not found`);
+      }
+
+      await this.assertNoOpenLoan(manager, userId, bookId);
+
+      const borrowDate = new Date();
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + DEFAULT_LOAN_DAYS);
+
+      const loan = manager.create(Loan, {
+        bookId,
+        userId,
+        borrowDate,
+        dueDate,
+        status: LoanStatus.PENDING,
+      });
+      return await manager.save(Loan, loan);
+    });
   }
 
   async approve(id: string): Promise<Loan> {
-    const loan = await this.findOne(id);
-    
-    if (loan.status !== LoanStatus.PENDING) {
-      throw new BadRequestException('Only pending loans can be approved');
-    }
+    return await this.connection.transaction(async manager => {
+      const loan = await this.findOneWithin(manager, id);
 
-    const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
-    if (!book) {
-      throw new NotFoundException(`Book with ID ${loan.bookId} not found`);
-    }
+      if (loan.status !== LoanStatus.PENDING) {
+        throw new BadRequestException('Only pending loans can be approved');
+      }
 
-    if (book.availableCopies <= 0) {
-      throw new BadRequestException('No available copies of this book');
-    }
+      await this.assertBorrowable(manager, loan.bookId);
+      await this.adjustAvailableCopies(manager, loan.bookId, -1);
 
-    // Decrease available copies
-    book.availableCopies -= 1;
-    await this.booksRepository.save(book);
-
-    loan.status = LoanStatus.ACTIVE;
-    return await this.loansRepository.save(loan);
+      loan.status = LoanStatus.ACTIVE;
+      return await manager.save(Loan, loan);
+    });
   }
 
   async decline(id: string): Promise<Loan> {
     const loan = await this.findOne(id);
-    
+
     if (loan.status !== LoanStatus.PENDING) {
       throw new BadRequestException('Only pending loans can be declined');
     }
 
     loan.status = LoanStatus.DECLINED;
     return await this.loansRepository.save(loan);
+  }
+
+  /** Marks an outstanding loan as returned and puts the copy back. */
+  async returnLoan(id: string, returnDate?: Date): Promise<Loan> {
+    return await this.connection.transaction(async manager => {
+      const loan = await this.findOneWithin(manager, id);
+
+      if (!holdsCopy(loan.status)) {
+        throw new BadRequestException('Only active loans can be returned');
+      }
+
+      await this.adjustAvailableCopies(manager, loan.bookId, 1);
+
+      loan.status = LoanStatus.RETURNED;
+      loan.returnDate = returnDate || new Date();
+      return await manager.save(Loan, loan);
+    });
+  }
+
+  async update(id: string, updateLoanDto: UpdateLoanDto): Promise<Loan> {
+    return await this.connection.transaction(async manager => {
+      const loan = await this.findOneWithin(manager, id);
+
+      const previousStatus = loan.status;
+      let nextStatus = updateLoanDto.status || previousStatus;
+
+      // Recording a return date on an outstanding loan implies a return.
+      if (updateLoanDto.returnDate && holdsCopy(previousStatus) && !updateLoanDto.status) {
+        nextStatus = LoanStatus.RETURNED;
+      }
+
+      if (!holdsCopy(previousStatus) && holdsCopy(nextStatus)) {
+        await this.adjustAvailableCopies(manager, loan.bookId, -1);
+      } else if (holdsCopy(previousStatus) && !holdsCopy(nextStatus)) {
+        await this.adjustAvailableCopies(manager, loan.bookId, 1);
+      }
+
+      if (updateLoanDto.returnDate !== undefined) {
+        loan.returnDate = new Date(updateLoanDto.returnDate);
+      } else if (nextStatus === LoanStatus.RETURNED && !loan.returnDate) {
+        loan.returnDate = new Date();
+      }
+
+      loan.status = nextStatus;
+      return await manager.save(Loan, loan);
+    });
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.connection.transaction(async manager => {
+      const loan = await this.findOneWithin(manager, id);
+
+      // Deleting an outstanding loan releases its copy; deleting a pending or
+      // returned one must not, because it never held (or already released) one.
+      if (holdsCopy(loan.status)) {
+        await this.adjustAvailableCopies(manager, loan.bookId, 1);
+      }
+
+      await manager.remove(Loan, loan);
+    });
+  }
+
+  async cancelUserLoan(userId: string, loanId: string): Promise<void> {
+    await this.connection.transaction(async manager => {
+      const loan = await this.findOneWithin(manager, loanId);
+
+      // Verify that the loan belongs to the user
+      if (loan.userId !== userId) {
+        throw new ForbiddenException('You can only cancel your own loans');
+      }
+
+      // Only allow canceling pending or active loans
+      if (loan.status !== LoanStatus.PENDING && !holdsCopy(loan.status)) {
+        throw new BadRequestException('You can only cancel pending or active loans');
+      }
+
+      if (holdsCopy(loan.status)) {
+        await this.adjustAvailableCopies(manager, loan.bookId, 1);
+      }
+
+      await manager.remove(Loan, loan);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queries
+  // ---------------------------------------------------------------------------
+
+  private async findOneWithin(manager: EntityManager, id: string): Promise<Loan> {
+    const loan = await manager.findOne(Loan, id);
+    if (!loan) {
+      throw new NotFoundException(`Loan with ID ${id} not found`);
+    }
+    return loan;
   }
 
   async findAll(): Promise<Loan[]> {
@@ -137,38 +294,6 @@ export class LoansService {
       throw new NotFoundException(`Loan with ID ${id} not found`);
     }
     return loan;
-  }
-
-  async update(id: string, updateLoanDto: UpdateLoanDto): Promise<Loan> {
-    const loan = await this.findOne(id);
-    
-    // If returning the book
-    if (updateLoanDto.returnDate && loan.status === LoanStatus.ACTIVE) {
-      const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
-      if (book) {
-        book.availableCopies += 1;
-        await this.booksRepository.save(book);
-      }
-      loan.status = LoanStatus.RETURNED;
-    }
-
-    Object.assign(loan, updateLoanDto);
-    return await this.loansRepository.save(loan);
-  }
-
-  async remove(id: string): Promise<void> {
-    const loan = await this.findOne(id);
-    
-    // If active loan, return the book
-    if (loan.status === LoanStatus.ACTIVE) {
-      const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
-      if (book) {
-        book.availableCopies += 1;
-        await this.booksRepository.save(book);
-      }
-    }
-    
-    await this.loansRepository.remove(loan);
   }
 
   async findByUser(userId: string): Promise<Loan[]> {
@@ -195,29 +320,11 @@ export class LoansService {
     });
   }
 
-  async cancelUserLoan(userId: string, loanId: string): Promise<void> {
-    const loan = await this.findOne(loanId);
-    
-    // Verify that the loan belongs to the user
-    if (loan.userId !== userId) {
-      throw new BadRequestException('You can only cancel your own loans');
-    }
-
-    // Only allow canceling pending or active loans
-    if (loan.status !== LoanStatus.PENDING && loan.status !== LoanStatus.ACTIVE) {
-      throw new BadRequestException('You can only cancel pending or active loans');
-    }
-
-    // If active loan, return the book
-    if (loan.status === LoanStatus.ACTIVE) {
-      const book = await this.booksRepository.findOne({ where: { id: loan.bookId } });
-      if (book) {
-        book.availableCopies += 1;
-        await this.booksRepository.save(book);
-      }
-    }
-    
-    await this.loansRepository.remove(loan);
+  async getPendingLoans(): Promise<Loan[]> {
+    return await this.loansRepository.find({
+      where: { status: LoanStatus.PENDING },
+      relations: ['book', 'user'],
+      order: { createdAt: 'DESC' },
+    });
   }
 }
-
