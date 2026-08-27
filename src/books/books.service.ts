@@ -1,62 +1,134 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { CreateBookDto } from './dto/create-book.dto';
 import { UpdateBookDto } from './dto/update-book.dto';
+import { BookFilterDto, PaginationDto, BOOK_SORT_FIELDS } from './dto/pagination.dto';
 import { Book, BookStatus } from './entities/book.entity';
+import { Loan } from '../loans/entities/loan.entity';
+import { env } from '../config/env';
 import * as fs from 'fs';
 import * as path from 'path';
+
+const EBOOK_SUBDIRECTORY = 'ebooks';
+
+export interface PaginatedBooks {
+  data: Book[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+interface CreateBookOverrides {
+  status?: BookStatus;
+  availableCopies?: number;
+}
 
 @Injectable()
 export class BooksService {
   constructor(
     @InjectRepository(Book)
     private booksRepository: Repository<Book>,
+    @InjectRepository(Loan)
+    private loansRepository: Repository<Loan>,
   ) {}
 
-  async create(createBookDto: CreateBookDto, file?: Express.Multer.File, user?: any): Promise<Book> {
+  // ---------------------------------------------------------------------------
+  // File storage
+  // ---------------------------------------------------------------------------
+
+  private get ebooksDirectory(): string {
+    return path.join(env.uploads.directory, EBOOK_SUBDIRECTORY);
+  }
+
+  /**
+   * Resolves a stored filePath to an absolute path. Only the basename is used,
+   * so a malformed or tampered value can never escape the uploads directory.
+   */
+  resolveEbookPath(filePath: string): string | null {
+    if (!filePath) {
+      return null;
+    }
+    const filename = path.basename(filePath);
+    if (!filename || filename === '.' || filename === '..') {
+      return null;
+    }
+    return path.join(this.ebooksDirectory, filename);
+  }
+
+  private storeEbook(file: Express.Multer.File): string {
+    if (!fs.existsSync(this.ebooksDirectory)) {
+      fs.mkdirSync(this.ebooksDirectory, { recursive: true });
+    }
+
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const ext = path.extname(file.originalname);
+    const filename = `file-${uniqueSuffix}${ext}`;
+    fs.writeFileSync(path.join(this.ebooksDirectory, filename), file.buffer);
+
+    return `/${path.posix.join('uploads', EBOOK_SUBDIRECTORY, filename)}`;
+  }
+
+  private deleteEbook(filePath: string): void {
+    const absolutePath = this.resolveEbookPath(filePath);
+    if (absolutePath && fs.existsSync(absolutePath)) {
+      fs.unlinkSync(absolutePath);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Commands
+  // ---------------------------------------------------------------------------
+
+  async create(
+    createBookDto: CreateBookDto,
+    file?: Express.Multer.File,
+    user?: any,
+    overrides: CreateBookOverrides = {},
+  ): Promise<Book> {
+    // Surface the duplicate as a 409 instead of letting the unique index throw
+    // an unhandled driver error (which surfaced as a 500).
+    const existing = await this.booksRepository.findOne({ where: { isbn: createBookDto.isbn } });
+    if (existing) {
+      throw new ConflictException(`A book with ISBN ${createBookDto.isbn} already exists`);
+    }
+
     // Auto-approve if created by user with book:approve role, otherwise needs approval
-    const isAutoApproved = user?.hasRole?.('book:approve') || false;
-    
+    const isAutoApproved = (user && typeof user.hasRole === 'function' && user.hasRole('book:approve')) || false;
+    const status = overrides.status || (isAutoApproved ? BookStatus.APPROVED : BookStatus.REVIEWING);
+
+    const totalCopies = createBookDto.totalCopies;
+    const availableCopies =
+      overrides.availableCopies === undefined
+        ? totalCopies
+        : Math.max(0, Math.min(overrides.availableCopies, totalCopies));
+
     const bookData: Partial<Book> = {
       title: createBookDto.title,
       author: createBookDto.author,
       isbn: createBookDto.isbn,
       category: createBookDto.category,
-      totalCopies: createBookDto.totalCopies,
-      availableCopies: createBookDto.totalCopies,
+      totalCopies,
+      availableCopies,
       description: createBookDto.description,
       publishedDate: createBookDto.publishedDate ? new Date(createBookDto.publishedDate) : undefined,
       isEbook: createBookDto.isEbook || false,
-      status: isAutoApproved ? BookStatus.APPROVED : BookStatus.REVIEWING,
+      status,
     };
 
-    if (isAutoApproved && user?.id) {
+    if (status === BookStatus.APPROVED && user && user.id) {
       bookData.approvedBy = user.id;
       bookData.approvedAt = new Date();
     }
 
     // Save file to disk only after validation passes
     if (file && createBookDto.isEbook && file.buffer) {
-      const uploadsDir = path.join(process.cwd(), 'uploads', 'ebooks');
-      // Ensure directory exists
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-      
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      const ext = path.extname(file.originalname);
-      const filename = `file-${uniqueSuffix}${ext}`;
-      const filePath = path.join(uploadsDir, filename);
-      
-      // Write file to disk
-      fs.writeFileSync(filePath, file.buffer);
-      bookData.filePath = `/uploads/ebooks/${filename}`;
+      bookData.filePath = this.storeEbook(file);
     }
 
     const book = this.booksRepository.create(bookData);
-    const savedBook = await this.booksRepository.save(book);
-    return savedBook as Book;
+    return await this.booksRepository.save(book);
   }
 
   async approve(id: string, userId: string): Promise<Book> {
@@ -88,37 +160,21 @@ export class BooksService {
     return await this.booksRepository.save(book);
   }
 
-  async findAll(excludeDeprecated: boolean = true): Promise<Book[]> {
-    const queryBuilder = this.booksRepository.createQueryBuilder('book');
-    
-    if (excludeDeprecated) {
-      queryBuilder.where('book.status != :status', { status: BookStatus.DEPRECATED });
-    }
-    
-    return await queryBuilder.orderBy('book.createdAt', 'DESC').getMany();
-  }
-
-  async findOne(id: string): Promise<Book> {
-    const book = await this.booksRepository.findOne({
-      where: { id },
-      relations: ['loans'],
-    });
-    if (!book) {
-      throw new NotFoundException(`Book with ID ${id} not found`);
-    }
-    return book;
-  }
-
-  async update(id: string, updateBookDto: UpdateBookDto, file?: Express.Multer.File, requestReview?: boolean): Promise<Book> {
+  async update(
+    id: string,
+    updateBookDto: UpdateBookDto,
+    file?: Express.Multer.File,
+    requestReview?: boolean,
+  ): Promise<Book> {
     const book = await this.findOne(id);
-    
+
     // Prevent editing approved or reviewing books directly
     if ((book.status === BookStatus.APPROVED || book.status === BookStatus.REVIEWING) && !requestReview) {
       throw new BadRequestException('Cannot edit approved or reviewing books. Please deprecate the book first.');
     }
-    
+
     // Allow editing declined books - they can be edited and then request review
-    
+
     // If requesting review from deprecated, working, or declined book, change status to reviewing
     if (requestReview && (book.status === BookStatus.DEPRECATED || book.status === BookStatus.WORKING || book.status === BookStatus.DECLINED)) {
       book.status = BookStatus.REVIEWING;
@@ -127,41 +183,35 @@ export class BooksService {
       book.approvedBy = null;
       book.approvedAt = null;
     }
-    
+
     // If editing a deprecated book, change status to working
     if (book.status === BookStatus.DEPRECATED && !requestReview) {
       book.status = BookStatus.WORKING;
     }
-    
+
+    if (updateBookDto.isbn !== undefined && updateBookDto.isbn !== book.isbn) {
+      const duplicate = await this.booksRepository.findOne({ where: { isbn: updateBookDto.isbn } });
+      if (duplicate && duplicate.id !== book.id) {
+        throw new ConflictException(`A book with ISBN ${updateBookDto.isbn} already exists`);
+      }
+    }
+
     if (updateBookDto.totalCopies !== undefined) {
-      const difference = updateBookDto.totalCopies - book.totalCopies;
-      book.availableCopies = Math.max(0, book.availableCopies + difference);
+      const onLoan = Math.max(0, book.totalCopies - book.availableCopies);
+      if (updateBookDto.totalCopies < onLoan) {
+        throw new BadRequestException(
+          `Cannot reduce total copies to ${updateBookDto.totalCopies}: ${onLoan} ${onLoan === 1 ? 'copy is' : 'copies are'} currently on loan.`,
+        );
+      }
+      book.totalCopies = updateBookDto.totalCopies;
+      book.availableCopies = updateBookDto.totalCopies - onLoan;
     }
 
     if (file && updateBookDto.isEbook && file.buffer) {
-      // Delete old file if exists
       if (book.filePath) {
-        const oldFilePath = path.join(process.cwd(), book.filePath);
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
+        this.deleteEbook(book.filePath);
       }
-      
-      // Save new file to disk
-      const uploadsDir = path.join(process.cwd(), 'uploads', 'ebooks');
-      // Ensure directory exists
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-      
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      const ext = path.extname(file.originalname);
-      const filename = `file-${uniqueSuffix}${ext}`;
-      const filePath = path.join(uploadsDir, filename);
-      
-      // Write file to disk
-      fs.writeFileSync(filePath, file.buffer);
-      book.filePath = `/uploads/ebooks/${filename}`;
+      book.filePath = this.storeEbook(file);
     }
 
     // Convert publishedDate string to Date if provided
@@ -177,88 +227,99 @@ export class BooksService {
     if (updateBookDto.description !== undefined) book.description = updateBookDto.description;
     if (updateBookDto.isEbook !== undefined) book.isEbook = updateBookDto.isEbook;
 
-    const savedBook = await this.booksRepository.save(book);
-    return savedBook as Book;
+    return await this.booksRepository.save(book);
   }
 
   async remove(id: string): Promise<void> {
     const book = await this.findOne(id);
+
+    // Loans reference this book by foreign key; deleting underneath them used to
+    // fail with a raw driver error.
+    const loanCount = await this.loansRepository.count({ where: { bookId: id } });
+    if (loanCount > 0) {
+      throw new BadRequestException(
+        `Cannot delete this book: it has ${loanCount} loan ${loanCount === 1 ? 'record' : 'records'}. Deprecate it instead.`,
+      );
+    }
+
+    if (book.filePath) {
+      this.deleteEbook(book.filePath);
+    }
+
     await this.booksRepository.remove(book);
   }
 
-  async search(query: string, excludeDeprecated: boolean = true): Promise<Book[]> {
-    const queryBuilder = this.booksRepository
-      .createQueryBuilder('book')
-      .where('(book.title LIKE :query OR book.author LIKE :query OR book.isbn LIKE :query OR book.category LIKE :query)', { query: `%${query}%` });
-    
-    if (excludeDeprecated) {
-      queryBuilder.andWhere('book.status != :deprecatedStatus', { deprecatedStatus: BookStatus.DEPRECATED });
-      queryBuilder.andWhere('book.status != :workingStatus', { workingStatus: BookStatus.WORKING });
+  // ---------------------------------------------------------------------------
+  // Queries
+  // ---------------------------------------------------------------------------
+
+  async findOne(id: string): Promise<Book> {
+    const book = await this.booksRepository.findOne({ where: { id } });
+    if (!book) {
+      throw new NotFoundException(`Book with ID ${id} not found`);
     }
-    
-    return await queryBuilder.orderBy('book.createdAt', 'DESC').getMany();
+    return book;
   }
 
-  async findWithPagination(paginationDto: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    sortBy?: string;
-    sortOrder?: 'ASC' | 'DESC';
-    status?: BookStatus;
-    title?: string;
-    author?: string;
-    isbn?: string;
-    category?: string;
-  }): Promise<{ data: Book[]; total: number; page: number; limit: number; totalPages: number }> {
+  /** Applies the shared search/column filters to a query builder. */
+  private applyFilters(
+    queryBuilder: SelectQueryBuilder<Book>,
+    filters: BookFilterDto,
+    includeNonApproved: boolean,
+  ): void {
+    if (filters.search) {
+      queryBuilder.andWhere(
+        '(book.title LIKE :search OR book.author LIKE :search OR book.isbn LIKE :search OR book.category LIKE :search)',
+        { search: `%${filters.search}%` },
+      );
+    }
+
+    if (!includeNonApproved) {
+      // Callers without book:read only ever see the published catalogue,
+      // whatever status they ask for.
+      queryBuilder.andWhere('book.status = :approvedStatus', { approvedStatus: BookStatus.APPROVED });
+    } else if (filters.status) {
+      queryBuilder.andWhere('book.status = :status', { status: filters.status });
+    } else {
+      // Default management view hides drafts and retired titles.
+      queryBuilder.andWhere('book.status NOT IN (:...hiddenStatuses)', {
+        hiddenStatuses: [BookStatus.DEPRECATED, BookStatus.WORKING],
+      });
+    }
+
+    if (filters.title) {
+      queryBuilder.andWhere('book.title LIKE :title', { title: `%${filters.title}%` });
+    }
+    if (filters.author) {
+      queryBuilder.andWhere('book.author LIKE :author', { author: `%${filters.author}%` });
+    }
+    if (filters.isbn) {
+      queryBuilder.andWhere('book.isbn LIKE :isbn', { isbn: `%${filters.isbn}%` });
+    }
+    if (filters.category) {
+      queryBuilder.andWhere('book.category LIKE :category', { category: `%${filters.category}%` });
+    }
+  }
+
+  async findWithPagination(
+    paginationDto: PaginationDto,
+    includeNonApproved: boolean = false,
+  ): Promise<PaginatedBooks> {
     const page = paginationDto.page || 1;
     const limit = paginationDto.limit || 10;
     const skip = (page - 1) * limit;
 
     const queryBuilder = this.booksRepository.createQueryBuilder('book');
+    this.applyFilters(queryBuilder, paginationDto, includeNonApproved);
 
-    // Global search
-    if (paginationDto.search) {
-      queryBuilder.where(
-        '(book.title LIKE :search OR book.author LIKE :search OR book.isbn LIKE :search OR book.category LIKE :search)',
-        { search: `%${paginationDto.search}%` }
-      );
-    }
+    // Both halves of the ORDER BY are re-checked against allow-lists here, so a
+    // bypassed or stale DTO can still never inject SQL.
+    const sortBy = BOOK_SORT_FIELDS.indexOf(paginationDto.sortBy) !== -1 ? paginationDto.sortBy : 'createdAt';
+    const sortOrder = paginationDto.sortOrder === 'ASC' ? 'ASC' : 'DESC';
+    queryBuilder.orderBy(`book.${sortBy}`, sortOrder);
 
-    // Column-specific filters
-    if (paginationDto.status) {
-      queryBuilder.andWhere('book.status = :status', { status: paginationDto.status });
-    } else {
-      // Exclude deprecated and in_progress books by default unless explicitly requested
-      queryBuilder.andWhere('book.status != :deprecatedStatus', { deprecatedStatus: BookStatus.DEPRECATED });
-      queryBuilder.andWhere('book.status != :workingStatus', { workingStatus: BookStatus.WORKING });
-    }
-    if (paginationDto.title) {
-      queryBuilder.andWhere('book.title LIKE :title', { title: `%${paginationDto.title}%` });
-    }
-    if (paginationDto.author) {
-      queryBuilder.andWhere('book.author LIKE :author', { author: `%${paginationDto.author}%` });
-    }
-    if (paginationDto.isbn) {
-      queryBuilder.andWhere('book.isbn LIKE :isbn', { isbn: `%${paginationDto.isbn}%` });
-    }
-    if (paginationDto.category) {
-      queryBuilder.andWhere('book.category LIKE :category', { category: `%${paginationDto.category}%` });
-    }
-
-    // Sorting
-    const sortBy = paginationDto.sortBy || 'createdAt';
-    const sortOrder = paginationDto.sortOrder || 'DESC';
-    const validSortFields = ['title', 'author', 'isbn', 'category', 'status', 'createdAt', 'updatedAt', 'totalCopies', 'availableCopies'];
-    const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
-    queryBuilder.orderBy(`book.${finalSortBy}`, sortOrder);
-
-    // Get total count
     const total = await queryBuilder.getCount();
-
-    // Apply pagination
     queryBuilder.skip(skip).take(limit);
-
     const data = await queryBuilder.getMany();
 
     return {
@@ -266,54 +327,22 @@ export class BooksService {
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit) || 0,
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // CSV export / import
+  // ---------------------------------------------------------------------------
 
   /**
    * Export books to CSV format
    * @param filters - Optional filters to apply to the export
    * @returns CSV string
    */
-  async exportToCSV(filters?: {
-    search?: string;
-    status?: BookStatus;
-    title?: string;
-    author?: string;
-    isbn?: string;
-    category?: string;
-  }): Promise<string> {
+  async exportToCSV(filters: BookFilterDto = {}): Promise<string> {
     const queryBuilder = this.booksRepository.createQueryBuilder('book');
-
-    // Apply filters if provided
-    if (filters?.search) {
-      queryBuilder.where(
-        '(book.title LIKE :search OR book.author LIKE :search OR book.isbn LIKE :search OR book.category LIKE :search)',
-        { search: `%${filters.search}%` }
-      );
-    }
-
-    if (filters?.status) {
-      queryBuilder.andWhere('book.status = :status', { status: filters.status });
-    }
-
-    if (filters?.title) {
-      queryBuilder.andWhere('book.title LIKE :title', { title: `%${filters.title}%` });
-    }
-
-    if (filters?.author) {
-      queryBuilder.andWhere('book.author LIKE :author', { author: `%${filters.author}%` });
-    }
-
-    if (filters?.isbn) {
-      queryBuilder.andWhere('book.isbn LIKE :isbn', { isbn: `%${filters.isbn}%` });
-    }
-
-    if (filters?.category) {
-      queryBuilder.andWhere('book.category LIKE :category', { category: `%${filters.category}%` });
-    }
-
-    // Order by title for better readability
+    this.applyFilters(queryBuilder, filters, true);
     queryBuilder.orderBy('book.title', 'ASC');
 
     const books = await queryBuilder.getMany();
@@ -333,19 +362,6 @@ export class BooksService {
       'Created At',
       'Updated At',
     ];
-
-    // Escape CSV values (handle commas, quotes, newlines)
-    const escapeCSV = (value: any): string => {
-      if (value === null || value === undefined) {
-        return '';
-      }
-      const stringValue = String(value);
-      // If value contains comma, quote, or newline, wrap in quotes and escape quotes
-      if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-        return `"${stringValue.replace(/"/g, '""')}"`;
-      }
-      return stringValue;
-    };
 
     // Format date for CSV
     const formatDate = (date: Date | null | undefined): string => {
@@ -384,22 +400,17 @@ export class BooksService {
    * @returns Array of parsed book objects
    */
   private parseCSV(csvContent: string): any[] {
-    const lines = csvContent.split('\n').filter(line => line.trim() !== '');
+    const lines = csvContent.split(/\r?\n/).filter(line => line.trim() !== '');
     if (lines.length < 2) {
       throw new BadRequestException('CSV file must contain at least a header row and one data row');
     }
 
     // Parse header row
     const headers = this.parseCSVLine(lines[0]);
-    const expectedHeaders = [
-      'Title', 'Author', 'ISBN', 'Category', 'Total Copies',
-      'Available Copies', 'Status', 'Is Ebook', 'Published Date',
-      'Description', 'Created At', 'Updated At'
-    ];
 
     // Map headers to lowercase for case-insensitive matching
     const headerMap: { [key: string]: string } = {};
-    headers.forEach((header, index) => {
+    headers.forEach((header) => {
       const normalizedHeader = header.trim().toLowerCase();
       headerMap[normalizedHeader] = header;
     });
@@ -412,6 +423,8 @@ export class BooksService {
       }
     }
 
+    const validStatuses: string[] = Object.keys(BookStatus).map(key => BookStatus[key]);
+
     // Parse data rows
     const books: any[] = [];
     for (let i = 1; i < lines.length; i++) {
@@ -421,7 +434,7 @@ export class BooksService {
       const book: any = {};
       headers.forEach((header, index) => {
         const normalizedHeader = header.trim().toLowerCase();
-        const value = values[index]?.trim() || '';
+        const value = (values[index] || '').trim();
 
         // Map headers to book properties
         switch (normalizedHeader) {
@@ -438,7 +451,7 @@ export class BooksService {
             book.category = value;
             break;
           case 'total copies':
-            book.totalCopies = parseInt(value, 10) || 0;
+            book.totalCopies = parseInt(value, 10);
             break;
           case 'available copies':
             book.availableCopies = parseInt(value, 10);
@@ -464,15 +477,17 @@ export class BooksService {
       }
 
       // Set defaults
-      if (book.totalCopies === undefined || isNaN(book.totalCopies)) {
+      if (book.totalCopies === undefined || isNaN(book.totalCopies) || book.totalCopies < 0) {
         book.totalCopies = 1;
       }
-      if (book.availableCopies === undefined || isNaN(book.availableCopies)) {
+      if (book.availableCopies === undefined || isNaN(book.availableCopies) || book.availableCopies < 0) {
         // Default to totalCopies if not specified
         book.availableCopies = book.totalCopies;
       }
-      if (!book.status) {
-        book.status = 'reviewing';
+      if (book.status && validStatuses.indexOf(book.status) === -1) {
+        throw new BadRequestException(
+          `Row ${i + 1}: Unknown status "${book.status}". Expected one of: ${validStatuses.join(', ')}`,
+        );
       }
       // Ensure availableCopies doesn't exceed totalCopies
       if (book.availableCopies > book.totalCopies) {
@@ -538,31 +553,15 @@ export class BooksService {
     let successCount = 0;
     let errorCount = 0;
 
-    // Check if user has auto-approve permission
-    const isAutoApproved = user?.hasRole?.('book:approve') || false;
+    // Only an approver may import rows that are already approved; for everyone
+    // else the requested status is ignored and the book enters review.
+    const canApprove = (user && typeof user.hasRole === 'function' && user.hasRole('book:approve')) || false;
 
     for (let i = 0; i < books.length; i++) {
       const bookData = books[i];
       const rowNumber = i + 2; // +2 because row 1 is header, and arrays are 0-indexed
 
       try {
-        // Check if book with same ISBN already exists
-        const existingBook = await this.booksRepository.findOne({
-          where: { isbn: bookData.isbn },
-        });
-
-        if (existingBook) {
-          results.push({
-            row: rowNumber,
-            book: `${bookData.title} (${bookData.isbn})`,
-            status: 'error',
-            message: `Book with ISBN ${bookData.isbn} already exists`,
-          });
-          errorCount++;
-          continue;
-        }
-
-        // Create book DTO
         const createBookDto: CreateBookDto = {
           title: bookData.title,
           author: bookData.author,
@@ -574,8 +573,11 @@ export class BooksService {
           isEbook: bookData.isEbook || false,
         };
 
-        // Create book using existing create method
-        await this.create(createBookDto, undefined, user);
+        // Columns the UI advertises as supported, now actually honoured.
+        await this.create(createBookDto, undefined, user, {
+          status: canApprove && bookData.status ? (bookData.status as BookStatus) : undefined,
+          availableCopies: bookData.availableCopies,
+        });
 
         results.push({
           row: rowNumber,
@@ -583,12 +585,12 @@ export class BooksService {
           status: 'success',
         });
         successCount++;
-      } catch (error: any) {
+      } catch (error) {
         results.push({
           row: rowNumber,
           book: `${bookData.title || 'Unknown'} (${bookData.isbn || 'N/A'})`,
           status: 'error',
-          message: error.message || 'Unknown error',
+          message: (error && error.message) || 'Unknown error',
         });
         errorCount++;
       }
@@ -602,3 +604,24 @@ export class BooksService {
   }
 }
 
+/**
+ * Escape a CSV value: quote it when needed, and neutralise leading characters
+ * that spreadsheet software would otherwise evaluate as a formula.
+ */
+export function escapeCSV(value: any): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  let stringValue = String(value);
+
+  if (/^[=+\-@\t\r]/.test(stringValue)) {
+    stringValue = `'${stringValue}`;
+  }
+
+  if (stringValue.indexOf(',') !== -1 || stringValue.indexOf('"') !== -1 || stringValue.indexOf('\n') !== -1) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+}
