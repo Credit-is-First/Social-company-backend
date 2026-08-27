@@ -2,8 +2,9 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Group } from './entities/group.entity';
+import { Role } from '../roles/entities/role.entity';
 import { RolesService } from '../roles/roles.service';
-import { Roles } from '../roles/roles.constants';
+import { DEFAULT_GROUP_DEFINITIONS } from '../roles/roles.constants';
 
 @Injectable()
 export class GroupsService {
@@ -75,14 +76,10 @@ export class GroupsService {
   ): Promise<Group> {
     const group = await this.findOne(id);
 
-    // Prevent updating default groups (except Super Admin which needs role updates)
-    if (group.isDefault && group.name !== 'Super Admin') {
-      throw new BadRequestException('Cannot update default groups');
-    }
-    
-    // Prevent renaming Super Admin group
-    if (group.name === 'Super Admin' && updateData.name && updateData.name !== 'Super Admin') {
-      throw new BadRequestException('Cannot rename Super Admin group');
+    // Default groups are identity-protected, not frozen: their whole purpose is
+    // to have roles assigned to them, so only renaming is blocked.
+    if (group.isDefault && updateData.name !== undefined && updateData.name !== group.name) {
+      throw new BadRequestException(`Cannot rename the default "${group.name}" group`);
     }
 
     if (updateData.name !== undefined) {
@@ -118,82 +115,35 @@ export class GroupsService {
     await this.groupsRepository.remove(group);
   }
 
+  /**
+   * Creates the default groups and tops up any roles they are missing.
+   *
+   * Only ever adds roles — an administrator who removes one from a default
+   * group keeps that decision across restarts.
+   */
   async ensureDefaultGroupsExist(): Promise<void> {
-    // Super Admin Group - assign all user, user_role, and group management roles
-    let superAdminGroup = await this.findByName('Super Admin');
-    if (!superAdminGroup) {
-      superAdminGroup = await this.create(
-        'Super Admin',
-        'Super administrator with all roles. Only one user can be in this group. This group is assigned to the first user during project setup.',
-        [],
-        true, // isDefault
-      );
-    }
+    // Roles must exist before groups, otherwise the role lookups below all miss
+    // and the default groups are created with no permissions at all.
+    await this.rolesService.ensureRolesExist();
 
-    // Assign all user, user_role, and group management roles to Super Admin
-    const superAdminRoleNames = [
-      // User Management
-      Roles.USER_READ,
-      Roles.USER_UPDATE,
-      Roles.USER_DELETE,
-      Roles.USER_BLOCK,
-      Roles.USER_RESET_PASSWORD,
-      // User Role Management
-      Roles.USER_ROLE_CREATE,
-      Roles.USER_ROLE_READ,
-      Roles.USER_ROLE_UPDATE,
-      Roles.USER_ROLE_DELETE,
-      // Group Management
-      Roles.GROUP_CREATE,
-      Roles.GROUP_READ,
-      Roles.GROUP_UPDATE,
-      Roles.GROUP_DELETE,
-    ];
+    for (const definition of DEFAULT_GROUP_DEFINITIONS) {
+      let group = await this.findByName(definition.name);
 
-    const superAdminRoles = (await Promise.all(
-      superAdminRoleNames.map(roleName => this.rolesService.findByName(roleName)),
-    )).filter((role): role is NonNullable<typeof role> => role !== undefined);
+      if (!group) {
+        group = await this.create(definition.name, definition.description, [], true);
+      }
 
-    // Only update if roles are missing
-    const currentRoleNames = superAdminGroup.roles?.map(r => r.name) || [];
-    const missingRoles = superAdminRoles.filter(role => !currentRoleNames.includes(role.name));
-    
-    if (missingRoles.length > 0) {
-      superAdminGroup.roles = [...(superAdminGroup.roles || []), ...missingRoles];
-      await this.groupsRepository.save(superAdminGroup);
-    }
+      const wanted = (await Promise.all(
+        definition.roles.map(roleName => this.rolesService.findByName(roleName)),
+      )).filter((role): role is Role => !!role);
 
-    // Admin Group
-    const adminGroup = await this.findByName('Admin');
-    if (!adminGroup) {
-      await this.create(
-        'Admin',
-        'Administrator role group. Roles can be assigned to this group.',
-        [],
-        true, // isDefault
-      );
-    }
+      const currentRoleNames = (group.roles || []).map(role => role.name);
+      const missingRoles = wanted.filter(role => currentRoleNames.indexOf(role.name) === -1);
 
-    // Librarian Group
-    const librarianGroup = await this.findByName('Librarian');
-    if (!librarianGroup) {
-      await this.create(
-        'Librarian',
-        'Librarian role group. Roles can be assigned to this group.',
-        [],
-        true, // isDefault
-      );
-    }
-
-    // User Group
-    const userGroup = await this.findByName('User');
-    if (!userGroup) {
-      await this.create(
-        'User',
-        'Regular user role group. Roles can be assigned to this group.',
-        [],
-        true, // isDefault
-      );
+      if (missingRoles.length > 0) {
+        group.roles = (group.roles || []).concat(missingRoles);
+        await this.groupsRepository.save(group);
+      }
     }
   }
 }

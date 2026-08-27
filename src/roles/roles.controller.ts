@@ -4,6 +4,8 @@ import { RolesService } from './roles.service';
 import { Role } from './entities/role.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { HasRoles } from '../auth/decorators/roles.decorator';
+import { Roles } from './roles.constants';
 
 @ApiTags('roles')
 @Controller('roles')
@@ -13,6 +15,7 @@ export class RolesController {
   constructor(private readonly rolesService: RolesService) {}
 
   @Get()
+  @HasRoles(Roles.ROLE_READ)
   @ApiOperation({ summary: 'Get all roles' })
   @ApiResponse({ status: 200, description: 'List of all roles', type: [Role] })
   findAll() {
@@ -20,6 +23,7 @@ export class RolesController {
   }
 
   @Get(':id')
+  @HasRoles(Roles.ROLE_READ)
   @ApiOperation({ summary: 'Get a role by ID' })
   @ApiResponse({ status: 200, description: 'Role found', type: Role })
   @ApiResponse({ status: 404, description: 'Role not found' })

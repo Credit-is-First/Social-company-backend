@@ -22,7 +22,11 @@ export enum RoleAction {
 
 // Role name format: resource:action
 export const Roles = {
+  // Role Management
+  ROLE_READ: 'role:read',
+
   // User Management
+  USER_CREATE: 'user:create',
   USER_READ: 'user:read',
   USER_UPDATE: 'user:update',
   USER_DELETE: 'user:delete',
@@ -61,7 +65,21 @@ export type RoleName = typeof Roles[keyof typeof Roles];
 
 // Role definitions with descriptions
 export const ROLE_DEFINITIONS = [
+  // Role Management
+  {
+    name: Roles.ROLE_READ,
+    resource: RoleResource.ROLE,
+    action: RoleAction.READ,
+    description: 'View the role catalogue',
+  },
+
   // User Management
+  {
+    name: Roles.USER_CREATE,
+    resource: RoleResource.USER,
+    action: RoleAction.CREATE,
+    description: 'Create user accounts',
+  },
   {
     name: Roles.USER_READ,
     resource: RoleResource.USER,
@@ -215,3 +233,84 @@ export const ROLE_DEFINITIONS = [
     description: 'Delete book lending records',
   },
 ];
+
+export const ALL_ROLE_NAMES: string[] = ROLE_DEFINITIONS.map(definition => definition.name);
+
+export interface DefaultGroupDefinition {
+  name: string;
+  description: string;
+  roles: string[];
+}
+
+/**
+ * The groups seeded on first run, with role sets that make the application
+ * usable immediately. Seeding only ever *adds* missing roles, so changes an
+ * administrator makes afterwards are preserved.
+ *
+ * Note that browsing the approved catalogue needs no role at all — `book:read`
+ * is the elevated permission that reveals unapproved, draft and deprecated
+ * titles, which is why the User group does not get it.
+ */
+export const DEFAULT_GROUP_DEFINITIONS: DefaultGroupDefinition[] = [
+  {
+    name: 'Super Admin',
+    description:
+      'Super administrator with every role. Only one user can be in this group. Assigned to the first user during project setup.',
+    roles: ALL_ROLE_NAMES,
+  },
+  {
+    name: 'Admin',
+    description: 'Full operational access. Cannot permanently delete user accounts.',
+    roles: [
+      Roles.ROLE_READ,
+      Roles.USER_CREATE,
+      Roles.USER_READ,
+      Roles.USER_UPDATE,
+      Roles.USER_BLOCK,
+      Roles.USER_RESET_PASSWORD,
+      Roles.USER_ROLE_CREATE,
+      Roles.USER_ROLE_READ,
+      Roles.USER_ROLE_UPDATE,
+      Roles.USER_ROLE_DELETE,
+      Roles.GROUP_CREATE,
+      Roles.GROUP_READ,
+      Roles.GROUP_UPDATE,
+      Roles.GROUP_DELETE,
+      Roles.BOOK_READ,
+      Roles.BOOK_CREATE,
+      Roles.BOOK_UPDATE,
+      Roles.BOOK_DELETE,
+      Roles.BOOK_APPROVE,
+      Roles.BOOK_DECLINE,
+      Roles.BOOK_LENDING_REQUEST,
+      Roles.BOOK_LENDING_READ,
+      Roles.BOOK_LENDING_APPROVE,
+      Roles.BOOK_LENDING_DECLINE,
+      Roles.BOOK_LENDING_DELETE,
+    ],
+  },
+  {
+    name: 'Librarian',
+    description: 'Manages the catalogue and the lending desk. user:read is needed to look up borrowers.',
+    roles: [
+      Roles.USER_READ,
+      Roles.BOOK_READ,
+      Roles.BOOK_CREATE,
+      Roles.BOOK_UPDATE,
+      Roles.BOOK_APPROVE,
+      Roles.BOOK_DECLINE,
+      Roles.BOOK_LENDING_REQUEST,
+      Roles.BOOK_LENDING_READ,
+      Roles.BOOK_LENDING_APPROVE,
+      Roles.BOOK_LENDING_DECLINE,
+    ],
+  },
+  {
+    name: 'User',
+    description: 'Regular borrower. Can browse the approved catalogue and request loans.',
+    roles: [Roles.BOOK_LENDING_REQUEST],
+  },
+];
+
+export const SUPER_ADMIN_GROUP = 'Super Admin';
+export const DEFAULT_MEMBER_GROUP = 'User';
