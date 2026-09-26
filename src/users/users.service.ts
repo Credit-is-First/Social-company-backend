@@ -1,14 +1,17 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { User } from './entities/user.entity';
 import { Loan } from '../loans/entities/loan.entity';
+import { Role } from '../roles/entities/role.entity';
+import { Group } from '../groups/entities/group.entity';
+import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { RolesService } from '../roles/roles.service';
 import { GroupsService } from '../groups/groups.service';
-import { SUPER_ADMIN_GROUP, DEFAULT_MEMBER_GROUP } from '../roles/roles.constants';
+import { SUPER_ADMIN_GROUP, DEFAULT_MEMBER_GROUP, Roles } from '../roles/roles.constants';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -19,6 +22,8 @@ export class UsersService {
     private usersRepository: Repository<User>,
     @InjectRepository(Loan)
     private loansRepository: Repository<Loan>,
+    @InjectRepository(RefreshToken)
+    private refreshTokensRepository: Repository<RefreshToken>,
     private rolesService: RolesService,
     private groupsService: GroupsService,
   ) {}
@@ -46,10 +51,48 @@ export class UsersService {
   }
 
   // ---------------------------------------------------------------------------
+  // Privilege containment
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Nobody can hand out a role they do not hold themselves, directly or by way
+   * of a group. Without this an Admin could grant themselves (or a fresh
+   * account they control) every role, which is Super Admin in all but name.
+   *
+   * Only additions are checked, so editing a user who already holds roles the
+   * caller lacks still works as long as nothing new is being granted.
+   */
+  private assertCanGrant(actor: User, addedRoles: Role[], addedGroups: Group[]): void {
+    const held = actor.getAllRoleNames();
+    const granted: string[] = addedRoles.map(role => role.name);
+    addedGroups.forEach(group => (group.roles || []).forEach(role => granted.push(role.name)));
+
+    const beyondActor = granted.filter(name => held.indexOf(name) === -1);
+    if (beyondActor.length > 0) {
+      throw new ForbiddenException(
+        `You cannot grant roles you do not hold yourself: ${Array.from(new Set(beyondActor)).join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Taking over an account means taking over its roles, so resetting someone's
+   * password is only allowed when the caller already holds everything they do.
+   * This is what stops an Admin from resetting the Super Admin's password.
+   */
+  private assertCanActAs(actor: User, target: User): void {
+    const held = actor.getAllRoleNames();
+    const beyondActor = target.getAllRoleNames().filter(name => held.indexOf(name) === -1);
+    if (beyondActor.length > 0) {
+      throw new ForbiddenException('You cannot reset the password of an account with more privileges than your own');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Commands
   // ---------------------------------------------------------------------------
 
-  async create(createUserDto: CreateUserDto): Promise<User> {
+  async create(actor: User, createUserDto: CreateUserDto): Promise<User> {
     const existing = await this.usersRepository.findOne({ where: { email: createUserDto.email } });
     if (existing) {
       throw new ConflictException('Email already exists');
@@ -76,6 +119,8 @@ export class UsersService {
       );
     }
 
+    this.assertCanGrant(actor, roles, groups);
+
     const user = this.usersRepository.create({
       name: createUserDto.name,
       email: createUserDto.email,
@@ -89,34 +134,34 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
-    const user = await this.findOne(id);
-
-    // Only allow role updates through this endpoint
-    // Personal data (name, email, phone, address) should only be updated by users themselves via /auth/profile
+  async update(actor: User, id: string, updateUserDto: UpdateUserDto): Promise<User> {
+    // Personal data (name, email, phone, address) is ignored here; members
+    // update it themselves via /auth/profile. Roles are the only thing this
+    // endpoint changes, so it is held to the same rules as PATCH /users/:id/roles.
     if (updateUserDto.roleIds && Array.isArray(updateUserDto.roleIds)) {
-      const roles = await Promise.all(
-        updateUserDto.roleIds.map(roleId => this.rolesService.findOne(roleId))
-      );
-      user.roles = roles;
+      if (!actor.hasRole(Roles.USER_ROLE_UPDATE)) {
+        throw new ForbiddenException(`Changing roles requires the ${Roles.USER_ROLE_UPDATE} role`);
+      }
+      return await this.updateUserRoles(actor, id, updateUserDto.roleIds);
     }
 
-    // Ignore personal data fields - they should only be updated by the user themselves
-    // Personal data (name, email, phone, address) is ignored here
-
-    return await this.usersRepository.save(user);
+    return await this.findOne(id);
   }
 
-  async updateUserRoles(userId: string, roleIds: string[]): Promise<User> {
+  async updateUserRoles(actor: User, userId: string, roleIds: string[]): Promise<User> {
     const user = await this.findOne(userId);
     const roles = await Promise.all(
       roleIds.map(roleId => this.rolesService.findOne(roleId))
     );
+
+    const currentIds = (user.roles || []).map(role => role.id);
+    this.assertCanGrant(actor, roles.filter(role => currentIds.indexOf(role.id) === -1), []);
+
     user.roles = roles;
     return await this.usersRepository.save(user);
   }
 
-  async updateUserGroups(userId: string, groupIds: string[]): Promise<User> {
+  async updateUserGroups(actor: User, userId: string, groupIds: string[]): Promise<User> {
     const user = await this.findOne(userId);
     const groups = await Promise.all(
       groupIds.map(groupId => this.groupsService.findOne(groupId))
@@ -145,6 +190,9 @@ export class UsersService {
         throw new BadRequestException('Super Admin group can only have one member');
       }
     }
+
+    const currentIds = (user.groups || []).map(group => group.id);
+    this.assertCanGrant(actor, [], groups.filter(group => currentIds.indexOf(group.id) === -1));
 
     user.groups = groups;
     return await this.usersRepository.save(user);
@@ -178,10 +226,21 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async resetUserPassword(userId: string, newPassword: string): Promise<User> {
+  async resetUserPassword(actor: User, userId: string, newPassword: string): Promise<User> {
     const user = await this.findOne(userId);
+    this.assertCanActAs(actor, user);
+
     user.password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    return await this.usersRepository.save(user);
+    const saved = await this.usersRepository.save(user);
+
+    // Whoever knew the old password may still hold a session; end them all,
+    // exactly as a self-service password change does.
+    await this.refreshTokensRepository.update(
+      { userId: user.id, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+
+    return saved;
   }
 
   // ---------------------------------------------------------------------------

@@ -43,8 +43,8 @@ export class UsersController {
   @ApiOperation({ summary: 'Create a user account on someone\'s behalf' })
   @ApiResponse({ status: 201, description: 'User created successfully', type: User })
   @ApiResponse({ status: 409, description: 'Email already exists' })
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  create(@CurrentUser() actor: User, @Body() createUserDto: CreateUserDto) {
+    return this.usersService.create(actor, createUserDto);
   }
 
   @Get()
@@ -97,8 +97,8 @@ export class UsersController {
   @HasRoles(Roles.USER_UPDATE)
   @ApiOperation({ summary: 'Update user roles (personal data can only be updated by the user themselves via /auth/profile)' })
   @ApiResponse({ status: 200, description: 'User roles updated successfully', type: User })
-  update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.usersService.update(id, updateUserDto);
+  update(@CurrentUser() actor: User, @Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
+    return this.usersService.update(actor, id, updateUserDto);
   }
 
   @Patch(':id/block')
@@ -113,24 +113,24 @@ export class UsersController {
   @HasRoles(Roles.USER_RESET_PASSWORD)
   @ApiOperation({ summary: 'Reset user password' })
   @ApiResponse({ status: 200, description: 'User password reset successfully', type: User })
-  resetPassword(@Param('id') id: string, @Body() body: ResetUserPasswordDto) {
-    return this.usersService.resetUserPassword(id, body.newPassword);
+  resetPassword(@CurrentUser() actor: User, @Param('id') id: string, @Body() body: ResetUserPasswordDto) {
+    return this.usersService.resetUserPassword(actor, id, body.newPassword);
   }
 
   @Patch(':id/roles')
   @HasRoles(Roles.USER_ROLE_UPDATE)
   @ApiOperation({ summary: 'Update user roles' })
   @ApiResponse({ status: 200, description: 'User roles updated successfully', type: User })
-  updateRoles(@Param('id') id: string, @Body() body: UpdateUserRolesDto) {
-    return this.usersService.updateUserRoles(id, body.roleIds);
+  updateRoles(@CurrentUser() actor: User, @Param('id') id: string, @Body() body: UpdateUserRolesDto) {
+    return this.usersService.updateUserRoles(actor, id, body.roleIds);
   }
 
   @Patch(':id/groups')
   @HasRoles(Roles.USER_ROLE_UPDATE)
   @ApiOperation({ summary: 'Update user groups' })
   @ApiResponse({ status: 200, description: 'User groups updated successfully', type: User })
-  updateGroups(@Param('id') id: string, @Body() body: UpdateUserGroupsDto) {
-    return this.usersService.updateUserGroups(id, body.groupIds);
+  updateGroups(@CurrentUser() actor: User, @Param('id') id: string, @Body() body: UpdateUserGroupsDto) {
+    return this.usersService.updateUserGroups(actor, id, body.groupIds);
   }
 
   @Delete(':id')
