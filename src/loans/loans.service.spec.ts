@@ -115,7 +115,7 @@ function buildService(world: World) {
   };
 
   const service = new LoansService(loansRepository, {} as any, {} as any, connection);
-  return { service, manager, loansRepository };
+  return { service, manager, loansRepository, connection };
 }
 
 function freshWorld(bookOverrides: Partial<Book> = {}, userOverrides: Partial<User> = {}): World {
@@ -205,6 +205,18 @@ describe('LoansService copy accounting', () => {
       await expect(service.approve('loan-1')).rejects.toBeInstanceOf(BadRequestException);
 
       expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('reads the loan under a row lock so concurrent transitions serialise', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service, manager } = buildService(world);
+
+      await service.approve('loan-1');
+
+      expect(manager.findOne).toHaveBeenCalledWith(Loan, 'loan-1', {
+        lock: { mode: 'pessimistic_write' },
+      });
     });
 
     it('refuses when the last copy went while the request was pending', async () => {
@@ -367,6 +379,32 @@ describe('LoansService copy accounting', () => {
     });
   });
 
+  describe('decline', () => {
+    it('runs inside a transaction and reads the loan under a lock', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
+      const { service, manager, connection } = buildService(world);
+
+      const loan = await service.decline('loan-1');
+
+      expect(loan.status).toBe(LoanStatus.DECLINED);
+      expect(connection.transaction).toHaveBeenCalled();
+      expect(manager.findOne).toHaveBeenCalledWith(Loan, 'loan-1', {
+        lock: { mode: 'pessimistic_write' },
+      });
+    });
+
+    it('refuses a loan that was already approved', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await expect(service.decline('loan-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(world.loans['loan-1'].status).toBe(LoanStatus.ACTIVE);
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+  });
+
   describe('remove and cancel', () => {
     it('releases the copy when deleting an active loan', async () => {
       const world = freshWorld({ availableCopies: 1 });
@@ -410,14 +448,38 @@ describe('LoansService copy accounting', () => {
       expect(world.books[BOOK_ID].availableCopies).toBe(1);
     });
 
-    it('releases the copy when the owner cancels an active loan', async () => {
-      const world = freshWorld({ availableCopies: 1 });
-      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+    it('lets the owner withdraw a pending request', async () => {
+      const world = freshWorld();
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.PENDING });
       const { service } = buildService(world);
 
       await service.cancelUserLoan(USER_ID, 'loan-1');
 
+      expect(world.loans['loan-1']).toBeUndefined();
       expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('refuses to let the owner cancel an active loan', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+      const { service } = buildService(world);
+
+      await expect(service.cancelUserLoan(USER_ID, 'loan-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(world.loans['loan-1']).toBeDefined();
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
+    it('refuses to let the owner cancel an overdue loan', async () => {
+      const world = freshWorld({ availableCopies: 1 });
+      world.loans['loan-1'] = makeLoan({ status: LoanStatus.OVERDUE });
+      const { service } = buildService(world);
+
+      await expect(service.cancelUserLoan(USER_ID, 'loan-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
     });
 
     it('refuses to cancel an already returned loan', async () => {

@@ -184,14 +184,16 @@ export class LoansService {
   }
 
   async decline(id: string): Promise<Loan> {
-    const loan = await this.findOne(id);
+    return await this.connection.transaction(async manager => {
+      const loan = await this.findOneWithin(manager, id);
 
-    if (loan.status !== LoanStatus.PENDING) {
-      throw new BadRequestException('Only pending loans can be declined');
-    }
+      if (loan.status !== LoanStatus.PENDING) {
+        throw new BadRequestException('Only pending loans can be declined');
+      }
 
-    loan.status = LoanStatus.DECLINED;
-    return await this.loansRepository.save(loan);
+      loan.status = LoanStatus.DECLINED;
+      return await manager.save(Loan, loan);
+    });
   }
 
   /** Marks an outstanding loan as returned and puts the copy back. */
@@ -263,13 +265,11 @@ export class LoansService {
         throw new ForbiddenException('You can only cancel your own loans');
       }
 
-      // Only allow canceling pending or active loans
-      if (loan.status !== LoanStatus.PENDING && !holdsCopy(loan.status)) {
-        throw new BadRequestException('You can only cancel pending or active loans');
-      }
-
-      if (holdsCopy(loan.status)) {
-        await this.adjustAvailableCopies(manager, loan.bookId, 1);
+      // A member can withdraw a request, but once the book is in their hands
+      // the loan is the only record of where the copy is: it ends by being
+      // returned at the desk, never by being deleted.
+      if (loan.status !== LoanStatus.PENDING) {
+        throw new BadRequestException('Only pending requests can be cancelled. Return the book to end an active loan.');
       }
 
       await manager.remove(Loan, loan);
@@ -280,8 +280,16 @@ export class LoansService {
   // Queries
   // ---------------------------------------------------------------------------
 
+  /**
+   * Reads a loan under a row lock. Every status transition goes through here,
+   * so two concurrent transitions of the same loan (a double-clicked Approve,
+   * a return racing a cancel) serialise, and the second one sees the status
+   * the first one wrote instead of both passing their check.
+   */
   private async findOneWithin(manager: EntityManager, id: string): Promise<Loan> {
-    const loan = await manager.findOne(Loan, id);
+    const loan = await manager.findOne(Loan, id, {
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!loan) {
       throw new NotFoundException(`Loan with ID ${id} not found`);
     }
