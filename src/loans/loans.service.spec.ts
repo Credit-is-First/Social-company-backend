@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { LoansService } from './loans.service';
 import { Loan, LoanStatus } from './entities/loan.entity';
 import { Book, BookStatus } from '../books/entities/book.entity';
-import { User } from '../users/entities/user.entity';
+import { User, Gender } from '../users/entities/user.entity';
 
 /**
  * These tests pin the invariant the whole lending flow rests on:
@@ -28,6 +28,23 @@ function makeBook(overrides: Partial<Book> = {}): Book {
     availableCopies: 2,
     ...overrides,
   } as Book;
+}
+
+/**
+ * A real User instance, not a literal: borrowing consults the
+ * missingProfileFields getter, which only exists on the prototype.
+ */
+function makeUser(overrides: Partial<User> = {}): User {
+  return Object.assign(new User(), {
+    id: USER_ID,
+    name: 'Borrower',
+    phone: '5551234567',
+    address: '4 Library Lane',
+    dateOfBirth: new Date('1990-05-21'),
+    gender: Gender.OTHER,
+    occupation: 'Tester',
+    photoPath: '/uploads/photos/user-1.png',
+  }, overrides);
 }
 
 function makeLoan(overrides: Partial<Loan> = {}): Loan {
@@ -101,10 +118,10 @@ function buildService(world: World) {
   return { service, manager, loansRepository };
 }
 
-function freshWorld(bookOverrides: Partial<Book> = {}): World {
+function freshWorld(bookOverrides: Partial<Book> = {}, userOverrides: Partial<User> = {}): World {
   return {
     books: { [BOOK_ID]: makeBook(bookOverrides) },
-    users: { [USER_ID]: { id: USER_ID, name: 'Borrower' } as User },
+    users: { [USER_ID]: makeUser(userOverrides) },
     loans: {},
   };
 }
@@ -149,6 +166,21 @@ describe('LoansService copy accounting', () => {
       const { service } = buildService(world);
 
       await expect(service.createForUser(USER_ID, 'nope')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('refuses a member whose profile is incomplete', async () => {
+      const world = freshWorld({}, { photoPath: null, occupation: null });
+      const { service } = buildService(world);
+
+      await expect(service.createForUser(USER_ID, BOOK_ID)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(world.books[BOOK_ID].availableCopies).toBe(2);
+    });
+
+    it('names the outstanding fields when refusing', async () => {
+      const world = freshWorld({}, { photoPath: null });
+      const { service } = buildService(world);
+
+      await expect(service.createForUser(USER_ID, BOOK_ID)).rejects.toThrow(/Profile photo/);
     });
   });
 
@@ -229,6 +261,23 @@ describe('LoansService copy accounting', () => {
   });
 
   describe('create (staff issues a loan directly)', () => {
+    // Staff issuance deliberately skips the profile gate, so the desk can lend
+    // to someone who is still filling their details in at the counter.
+    it('issues to a member with an incomplete profile', async () => {
+      const world = freshWorld({}, { photoPath: null, occupation: null });
+      const { service } = buildService(world);
+
+      const loan = await service.create({
+        bookId: BOOK_ID,
+        userId: USER_ID,
+        borrowDate: '2026-01-01',
+        dueDate: '2026-01-15',
+      });
+
+      expect(loan.status).toBe(LoanStatus.ACTIVE);
+      expect(world.books[BOOK_ID].availableCopies).toBe(1);
+    });
+
     it('issues an active loan and takes a copy', async () => {
       const world = freshWorld();
       const { service } = buildService(world);

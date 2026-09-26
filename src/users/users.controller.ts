@@ -1,4 +1,21 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Query,
+  Res,
+  UseGuards,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Response } from 'express';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { resolveProfilePhotoPath, profilePhotoContentType } from './profile-photo';
+import * as fs from 'fs';
 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
@@ -39,6 +56,32 @@ export class UsersController {
       return this.usersService.search(search);
     }
     return this.usersService.findAll();
+  }
+
+  /**
+   * Photos are personal data, so this is never a static file. Members may fetch
+   * their own; anyone else needs user:read.
+   */
+  @Get(':id/photo')
+  @ApiOperation({ summary: 'Fetch a user\'s profile photo' })
+  @ApiResponse({ status: 200, description: 'Image stream' })
+  @ApiResponse({ status: 404, description: 'No photo set' })
+  async getPhoto(@Param('id') id: string, @Res() res: Response, @CurrentUser() requester: User) {
+    const isSelf = requester && requester.id === id;
+    const canReadUsers = requester && typeof requester.hasRole === 'function' && requester.hasRole(Roles.USER_READ);
+    if (!isSelf && !canReadUsers) {
+      throw new ForbiddenException('You may only view your own profile photo');
+    }
+
+    const user = await this.usersService.findOne(id);
+    const absolutePath = user.photoPath ? resolveProfilePhotoPath(user.photoPath) : null;
+    if (!absolutePath || !fs.existsSync(absolutePath)) {
+      throw new NotFoundException('This user has no profile photo');
+    }
+
+    res.setHeader('Content-Type', profilePhotoContentType(absolutePath));
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    fs.createReadStream(absolutePath).pipe(res);
   }
 
   @Get(':id')

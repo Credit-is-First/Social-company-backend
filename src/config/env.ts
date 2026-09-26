@@ -103,6 +103,7 @@ export const env = {
     directory: join(process.cwd(), optional('UPLOADS_DIR', 'uploads')),
     maxEbookBytes: toInt('MAX_EBOOK_BYTES', 50 * 1024 * 1024),
     maxCsvBytes: toInt('MAX_CSV_BYTES', 10 * 1024 * 1024),
+    maxPhotoBytes: toInt('MAX_PHOTO_BYTES', 5 * 1024 * 1024),
   },
 };
 

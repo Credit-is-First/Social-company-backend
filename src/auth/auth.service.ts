@@ -11,7 +11,9 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { RefreshTokenService } from './refresh-token.service';
+import { storeProfilePhoto, deleteProfilePhoto } from '../users/profile-photo';
 
 /**
  * The internal shape of a freshly minted session.
@@ -231,8 +233,8 @@ export class AuthService {
     return { message: 'Password changed successfully', refresh };
   }
 
-  async updateProfile(userId: string, updateData: { name?: string; phone?: string; address?: string }): Promise<User> {
-    const user = await this.usersRepository.findOne({ 
+  async updateProfile(userId: string, updateData: UpdateProfileDto): Promise<User> {
+    const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['roles']
     });
@@ -243,8 +245,73 @@ export class AuthService {
     if (updateData.name !== undefined) user.name = updateData.name;
     if (updateData.phone !== undefined) user.phone = updateData.phone;
     if (updateData.address !== undefined) user.address = updateData.address;
+    if (updateData.gender !== undefined) user.gender = updateData.gender;
+    if (updateData.occupation !== undefined) user.occupation = updateData.occupation;
+
+    if (updateData.dateOfBirth !== undefined) {
+      user.dateOfBirth = this.parseDateOfBirth(updateData.dateOfBirth);
+    }
 
     return await this.usersRepository.save(user);
+  }
+
+  /** Format is checked by the DTO; this checks the date is actually plausible. */
+  private parseDateOfBirth(value: string): Date {
+    const parsed = new Date(`${value}T00:00:00`);
+    if (isNaN(parsed.getTime())) {
+      throw new BadRequestException('Date of birth is not a valid date');
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (parsed > today) {
+      throw new BadRequestException('Date of birth cannot be in the future');
+    }
+
+    const oldest = new Date();
+    oldest.setFullYear(oldest.getFullYear() - 120);
+    if (parsed < oldest) {
+      throw new BadRequestException('Date of birth is not plausible');
+    }
+
+    return parsed;
+  }
+
+  /** Replaces the member's photo, removing any previous file from disk. */
+  async setProfilePhoto(userId: string, file: Express.Multer.File): Promise<User> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const previous = user.photoPath;
+    user.photoPath = storeProfilePhoto(userId, file);
+    const saved = await this.usersRepository.save(user);
+
+    // Only after the new path is committed, so a failed save cannot leave the
+    // record pointing at a file that no longer exists.
+    if (previous) {
+      deleteProfilePhoto(previous);
+    }
+
+    return saved;
+  }
+
+  async removeProfilePhoto(userId: string): Promise<User> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const previous = user.photoPath;
+    user.photoPath = null;
+    const saved = await this.usersRepository.save(user);
+
+    if (previous) {
+      deleteProfilePhoto(previous);
+    }
+
+    return saved;
   }
 
   async validateUser(userId: string): Promise<User> {

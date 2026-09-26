@@ -21,6 +21,21 @@ function cookieValue(response: any, name: string): string | null {
 
 const asCookie = (value: string): string => `${REFRESH_COOKIE_NAME}=${value}`;
 
+/** Smallest valid PNG, so photo upload can be exercised without a fixture file. */
+const ONE_PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+const COMPLETE_PROFILE = {
+  name: 'E2E Borrower',
+  phone: '1111111111',
+  address: '4 Library Lane',
+  dateOfBirth: '1990-05-21',
+  gender: 'female',
+  occupation: 'Engineer',
+};
+
 /**
  * End-to-end coverage of the flows that carry the most risk: authentication,
  * authorisation on formerly public endpoints, refresh-token rotation, the
@@ -80,6 +95,8 @@ describe('Library API (e2e)', () => {
   let loginResponse: any;
   let borrowerToken: string;
   let borrowerId: string;
+  let borrowerProfileComplete: boolean;
+  let borrowerMissingFields: string[];
   let bookId: string;
 
   beforeAll(async () => {
@@ -447,10 +464,19 @@ describe('Library API (e2e)', () => {
 
       borrowerToken = login.body.access_token;
       borrowerId = login.body.user.id;
+      borrowerProfileComplete = login.body.user.profileComplete;
+      borrowerMissingFields = login.body.user.missingProfileFields;
 
       // The default group is what makes a freshly registered account able to
       // borrow at all.
       expect(login.body.user.groups.map((g: any) => g.name)).toContain('User');
+    });
+
+    it('starts with an incomplete profile', () => {
+      expect(borrowerProfileComplete).toBe(false);
+      expect(borrowerMissingFields).toEqual(
+        expect.arrayContaining(['Date of birth', 'Gender', 'Occupation', 'Profile photo']),
+      );
     });
 
     it('creates an auto-approved book', async () => {
@@ -495,6 +521,106 @@ describe('Library API (e2e)', () => {
     };
 
     let loanId: string;
+
+    it('refuses to borrow while the profile is incomplete', async () => {
+      const res = await request(http)
+        .post('/loans/borrow')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .send({ bookId })
+        .expect(403);
+
+      // The message must name what is missing, or the member has no way to act.
+      expect(res.body.message).toContain('Complete your profile');
+      expect(res.body.message).toContain('Profile photo');
+      expect(await availableCopies()).toBe(2);
+    });
+
+    it('rejects an implausible date of birth', () =>
+      request(http)
+        .patch('/auth/profile')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .send({ dateOfBirth: '2099-01-01' })
+        .expect(400));
+
+    it('rejects a malformed date of birth', () =>
+      request(http)
+        .patch('/auth/profile')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .send({ dateOfBirth: '21-05-1990' })
+        .expect(400));
+
+    it('rejects an unknown gender value', () =>
+      request(http)
+        .patch('/auth/profile')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .send({ gender: 'banana' })
+        .expect(400));
+
+    it('saves the individual details but stays incomplete without a photo', async () => {
+      const res = await request(http)
+        .patch('/auth/profile')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .send(COMPLETE_PROFILE)
+        .expect(200);
+
+      expect(res.body.occupation).toBe('Engineer');
+      expect(res.body.gender).toBe('female');
+      expect(res.body.profileComplete).toBe(false);
+      expect(res.body.missingProfileFields).toEqual(['Profile photo']);
+    });
+
+    it('rejects a non-image upload', () =>
+      request(http)
+        .post('/auth/profile/photo')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .attach('photo', Buffer.from('not an image'), {
+          filename: 'evil.txt',
+          contentType: 'text/plain',
+        })
+        .expect(400));
+
+    it('completes the profile once a photo is uploaded', async () => {
+      const res = await request(http)
+        .post('/auth/profile/photo')
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .attach('photo', ONE_PIXEL_PNG, { filename: 'me.png', contentType: 'image/png' })
+        .expect(201);
+
+      expect(res.body.profileComplete).toBe(true);
+      expect(res.body.missingProfileFields).toEqual([]);
+      // The stored path must never be echoed as a public URL.
+      expect(res.body.photoPath).toContain('/uploads/photos/');
+    });
+
+    it('serves the photo back to its owner', async () => {
+      const res = await request(http)
+        .get(`/users/${borrowerId}/photo`)
+        .set('Authorization', `Bearer ${borrowerToken}`)
+        .expect(200);
+
+      expect(res.headers['content-type']).toContain('image/png');
+    });
+
+    it('refuses the photo to another member without user:read', async () => {
+      const other = {
+        name: 'Nosy Member',
+        email: `e2e-nosy-${stamp}@test.local`,
+        phone: '9999999999',
+        password: 'NosyPass123',
+        securityQuestion: 'What city were you born in?',
+        securityAnswer: 'Rome',
+      };
+      await request(http).post('/auth/register').send(other).expect(201);
+      const login = await request(http)
+        .post('/auth/login')
+        .send({ email: other.email, password: other.password })
+        .expect(200);
+
+      await request(http)
+        .get(`/users/${borrowerId}/photo`)
+        .set('Authorization', `Bearer ${login.body.access_token}`)
+        .expect(403);
+    });
 
     it('creates a pending request that reserves nothing', async () => {
       const res = await request(http)

@@ -8,12 +8,20 @@ import {
   Query,
   Req,
   Res,
+  Delete,
   HttpCode,
   HttpStatus,
   UnauthorizedException,
+  BadRequestException,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { env } from '../config/env';
+import { PROFILE_PHOTO_MIME_TYPES } from '../users/profile-photo';
 import { AuthService, AuthSession } from './auth.service';
 import { setRefreshCookie, clearRefreshCookie, readRefreshCookie } from './refresh-cookie';
 import { RegisterDto } from './dto/register.dto';
@@ -190,5 +198,41 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Profile updated successfully' })
   async updateProfile(@CurrentUser() user: User, @Body() updateData: UpdateProfileDto) {
     return this.authService.updateProfile(user.id, updateData);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Post('profile/photo')
+  @UseInterceptors(FileInterceptor('photo', {
+    storage: memoryStorage(),
+    fileFilter: (req, file, cb) => {
+      if (PROFILE_PHOTO_MIME_TYPES.indexOf(file.mimetype) !== -1) {
+        cb(null, true);
+      } else {
+        cb(new BadRequestException('Invalid image type. Use JPEG, PNG or WebP.'), false);
+      }
+    },
+    limits: { fileSize: env.uploads.maxPhotoBytes },
+  }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload the current user\'s profile photo' })
+  @ApiResponse({ status: 201, description: 'Photo saved' })
+  @ApiBody({
+    schema: { type: 'object', properties: { photo: { type: 'string', format: 'binary' } } },
+  })
+  async uploadProfilePhoto(@CurrentUser() user: User, @UploadedFile() photo?: Express.Multer.File) {
+    if (!photo) {
+      throw new BadRequestException('An image file is required');
+    }
+    return this.authService.setProfilePhoto(user.id, photo);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Delete('profile/photo')
+  @ApiOperation({ summary: 'Remove the current user\'s profile photo' })
+  @ApiResponse({ status: 200, description: 'Photo removed' })
+  async deleteProfilePhoto(@CurrentUser() user: User) {
+    return this.authService.removeProfilePhoto(user.id);
   }
 }

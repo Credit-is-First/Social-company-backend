@@ -140,6 +140,16 @@ export class LoansService {
         throw new NotFoundException(`User with ID ${userId} not found`);
       }
 
+      // Members must complete their profile before borrowing. Staff-issued
+      // loans (create()) deliberately skip this, so the desk can still lend to
+      // someone who is filling their details in at the counter.
+      const missing = user.missingProfileFields;
+      if (missing.length > 0) {
+        throw new ForbiddenException(
+          `Complete your profile before borrowing. Still needed: ${missing.join(', ')}.`,
+        );
+      }
+
       await this.assertNoOpenLoan(manager, userId, bookId);
 
       const borrowDate = new Date();
