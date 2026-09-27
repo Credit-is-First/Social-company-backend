@@ -31,6 +31,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 import { env } from '../config/env';
 import { memoryStorage } from 'multer';
+import { decodeCsvBuffer } from './csv-encoding';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -147,9 +148,9 @@ export class BooksController {
       throw new BadRequestException('CSV file is required');
     }
 
-    // Convert buffer to string
-    const csvContent = file.buffer.toString('utf-8');
-    return await this.booksService.importFromCSV(csvContent, user);
+    // Excel's plain "CSV" is GBK or Big5 on Chinese Windows, not UTF-8.
+    const { text } = decodeCsvBuffer(file.buffer);
+    return await this.booksService.importFromCSV(text, user);
   }
 
   @Get(':id')

@@ -6,6 +6,7 @@ import { UpdateBookDto } from './dto/update-book.dto';
 import { BookFilterDto, PaginationDto, BOOK_SORT_FIELDS } from './dto/pagination.dto';
 import { Book, BookStatus } from './entities/book.entity';
 import { Loan } from '../loans/entities/loan.entity';
+import { UNREADABLE_CHAR, UTF8_BOM } from './csv-encoding';
 import { env } from '../config/env';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -391,7 +392,9 @@ export class BooksService {
       ...rows.map((row) => row.join(',')),
     ];
 
-    return csvLines.join('\n');
+    // The BOM makes Excel read the file as UTF-8; without it Chinese and other
+    // non-Latin text opens garbled.
+    return UTF8_BOM + csvLines.join('\n');
   }
 
   /**
@@ -428,6 +431,13 @@ export class BooksService {
     // Parse data rows
     const books: any[] = [];
     for (let i = 1; i < lines.length; i++) {
+      if (lines[i].indexOf(UNREADABLE_CHAR) !== -1) {
+        throw new BadRequestException(
+          `Row ${i + 1}: contains characters that could not be read. ` +
+            'Save the file as "CSV UTF-8" in Excel and import it again.',
+        );
+      }
+
       const values = this.parseCSVLine(lines[i]);
       if (values.length === 0) continue; // Skip empty rows
 

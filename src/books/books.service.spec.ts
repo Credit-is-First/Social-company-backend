@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { BooksService, escapeCSV } from './books.service';
 import { BookStatus } from './entities/book.entity';
 import { BOOK_SORT_FIELDS } from './dto/pagination.dto';
+import * as iconv from 'iconv-lite';
+import { decodeCsvBuffer, UNREADABLE_CHAR, UTF8_BOM } from './csv-encoding';
 
 function buildService() {
   const saved: any[] = [];
@@ -252,5 +254,55 @@ describe('BooksService.importFromCSV', () => {
     const result = await service.importFromCSV(`${HEADER}\r\nDune,Herbert,111,SciFi,1,1,reviewing,No\r\n`);
 
     expect(result.success).toBe(1);
+  });
+
+  it('imports Chinese text', async () => {
+    const { service, saved } = buildService();
+
+    await service.importFromCSV(`${HEADER}\n三体,刘慈欣,9787536692930,科幻,3,3,reviewing,No`);
+
+    expect(saved[0]).toMatchObject({ title: '三体', author: '刘慈欣', category: '科幻' });
+  });
+
+  it('imports a GBK file from Excel once it is decoded', async () => {
+    const { service, saved } = buildService();
+    const upload = iconv.encode(`${HEADER}\r\n三体,刘慈欣,9787536692930,科幻,3,3,reviewing,No\r\n`, 'gbk');
+
+    await service.importFromCSV(decodeCsvBuffer(upload).text);
+
+    expect(saved[0]).toMatchObject({ title: '三体', author: '刘慈欣', category: '科幻' });
+  });
+
+  it('rejects the whole file when a row has characters that could not be read', async () => {
+    const { service, saved } = buildService();
+    const garbled = `Dune,Herbert,111,SciFi,1,1,reviewing,No\n${UNREADABLE_CHAR}${UNREADABLE_CHAR},A,222,SciFi,1,1,reviewing,No`;
+
+    await expect(service.importFromCSV(`${HEADER}\n${garbled}`)).rejects.toThrow(/Row 3: .*CSV UTF-8/);
+    expect(saved).toHaveLength(0);
+  });
+
+  it('reads back its own export', async () => {
+    const { service, queryBuilder, saved } = buildService();
+    queryBuilder.getMany.mockResolvedValueOnce([
+      { title: '三体', author: '刘慈欣', isbn: '9787536692930', category: '科幻', totalCopies: 3, availableCopies: 3, status: 'reviewing', isEbook: false },
+    ]);
+
+    await service.importFromCSV(await service.exportToCSV());
+
+    expect(saved[0]).toMatchObject({ title: '三体', author: '刘慈欣', isbn: '9787536692930' });
+  });
+});
+
+describe('BooksService.exportToCSV', () => {
+  it('starts with a UTF-8 BOM so Excel opens Chinese text correctly', async () => {
+    const { service, queryBuilder } = buildService();
+    queryBuilder.getMany.mockResolvedValueOnce([
+      { title: '三体', author: '刘慈欣', isbn: '9787536692930', category: '科幻', totalCopies: 3, availableCopies: 3, status: 'approved', isEbook: false },
+    ]);
+
+    const csv = await service.exportToCSV();
+
+    expect(csv.charAt(0)).toBe(UTF8_BOM);
+    expect(csv.slice(1).split('\n')[1]).toMatch(/^三体,刘慈欣,9787536692930,科幻,3,3,approved,No,/);
   });
 });
