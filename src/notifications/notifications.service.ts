@@ -94,6 +94,43 @@ export class NotificationsService {
     );
   }
 
+  loanDueSoon(loan: LoanRef, book: BookRef): Promise<void> {
+    return this.safely(() =>
+      this.notifyUsers([loan.userId], {
+        type: NotificationType.LOAN_DUE_SOON,
+        title: 'Book due soon',
+        message: `"${book.title}" is due back on ${formatDate(loan.dueDate)}.`,
+        link: '/my-page/book-lending',
+      }),
+    );
+  }
+
+  loanOverdue(loan: LoanRef, book: BookRef): Promise<void> {
+    return this.safely(() =>
+      this.notifyUsers([loan.userId], {
+        type: NotificationType.LOAN_OVERDUE,
+        title: 'Book overdue',
+        message: `"${book.title}" was due back on ${formatDate(loan.dueDate)}. Please return it as soon as you can.`,
+        link: '/my-page/book-lending',
+      }),
+    );
+  }
+
+  /** One alert per reminder run for staff, however many loans went overdue. */
+  loansOverdueSummary(count: number): Promise<void> {
+    if (count <= 0) {
+      return Promise.resolve();
+    }
+    return this.safely(() =>
+      this.notifyRoleHolders(Roles.BOOK_LENDING_APPROVE, {
+        type: NotificationType.LOANS_OVERDUE_SUMMARY,
+        title: 'Loans overdue',
+        message: `${count} ${count === 1 ? 'loan has' : 'loans have'} just become overdue.`,
+        link: '/manager/lending',
+      }),
+    );
+  }
+
   /** A book entered review: tell everyone who can approve books. */
   bookAwaitingReview(book: BookRef, actorId?: string): Promise<void> {
     return this.safely(() =>

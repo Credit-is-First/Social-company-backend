@@ -45,6 +45,16 @@ export class Loan {
   })
   status: LoanStatus;
 
+  /** When the one "due soon" reminder went out; null until then. */
+  @ApiProperty({ required: false })
+  @Column({ type: 'timestamp', nullable: true })
+  dueSoonNotifiedAt: Date | null;
+
+  /** When the borrower was last reminded that the loan is overdue. */
+  @ApiProperty({ required: false })
+  @Column({ type: 'timestamp', nullable: true })
+  overdueNotifiedAt: Date | null;
+
   @ManyToOne(() => Book, book => book.loans)
   @JoinColumn({ name: 'bookId' })
   book: Book;

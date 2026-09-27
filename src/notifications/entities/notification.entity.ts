@@ -10,6 +10,9 @@ export enum NotificationType {
   BOOK_REVIEW_REQUESTED = 'book_review_requested',
   BOOK_APPROVED = 'book_approved',
   BOOK_DECLINED = 'book_declined',
+  LOAN_DUE_SOON = 'loan_due_soon',
+  LOAN_OVERDUE = 'loan_overdue',
+  LOANS_OVERDUE_SUMMARY = 'loans_overdue_summary',
 }
 
 /**

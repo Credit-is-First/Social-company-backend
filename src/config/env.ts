@@ -98,6 +98,16 @@ export const env = {
   // The frontend dev server is pinned to port 5000 in frontend/craco.config.js.
   corsOrigins: toList('CORS_ORIGINS', ['http://localhost:5000']),
 
+  loanReminders: {
+    // How often overdue loans are marked and reminders sent. 0 turns it off.
+    intervalMinutes: toInt('LOAN_REMINDER_INTERVAL_MINUTES', 60),
+    // A "due soon" reminder goes out once, this many days before the due date
+    // (1 = when the loan is due tomorrow or today).
+    dueSoonDays: toInt('LOAN_DUE_SOON_DAYS', 1),
+    // An overdue loan is reminded again every this many days until returned.
+    overdueRepeatDays: toInt('OVERDUE_REMINDER_REPEAT_DAYS', 7),
+  },
+
   uploads: {
     // Resolved once so file writes and file reads can never disagree.
     directory: join(process.cwd(), optional('UPLOADS_DIR', 'uploads')),

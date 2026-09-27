@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { LoansService } from './loans.service';
+import { LoanRemindersService } from './loan-reminders.service';
 import { CreateLoanDto } from './dto/create-loan.dto';
 import { UpdateLoanDto } from './dto/update-loan.dto';
 import { BorrowBookDto } from './dto/borrow-book.dto';
@@ -17,7 +18,18 @@ import { User } from '../users/entities/user.entity';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth()
 export class LoansController {
-  constructor(private readonly loansService: LoansService) {}
+  constructor(
+    private readonly loansService: LoansService,
+    private readonly loanReminders: LoanRemindersService,
+  ) {}
+
+  @Post('reminders/run')
+  @HasRoles(Roles.BOOK_LENDING_APPROVE)
+  @ApiOperation({ summary: 'Mark overdue loans and send due/overdue reminders now (also runs on a timer)' })
+  @ApiResponse({ status: 201, description: 'Counts of loans marked overdue and reminders sent' })
+  runReminders() {
+    return this.loanReminders.run();
+  }
 
   @Post()
   @HasRoles(Roles.BOOK_LENDING_APPROVE)

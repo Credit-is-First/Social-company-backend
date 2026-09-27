@@ -93,3 +93,9 @@ src/
   never throw: a delivery failure is logged, not reported as a failed action.
   Sockets authenticate with an `authenticate` message carrying the access token,
   not a query-string token, and receive only their own user's room.
+- `LoanRemindersService` runs on a timer (every `LOAN_REMINDER_INTERVAL_MINUTES`,
+  default 60, and 15 s after startup; 0 turns it off). It marks past-due active
+  loans `overdue` and sends due-soon and overdue reminders. Dates are compared with
+  the database's `CURDATE()`, and each reminder is claimed with a conditional
+  `UPDATE` before it is sent, so overlapping runs cannot double-send.
+  `POST /loans/reminders/run` runs a pass on demand.

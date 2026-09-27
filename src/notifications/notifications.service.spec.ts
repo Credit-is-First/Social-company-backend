@@ -248,3 +248,51 @@ describe('NotificationsService book decisions', () => {
     expect(message.endsWith('…')).toBe(true);
   });
 });
+
+describe('NotificationsService loan reminders', () => {
+  it('tells the borrower when a loan is due soon', async () => {
+    const { service, gateway } = buildService();
+
+    await service.loanDueSoon({ userId: 'u1', dueDate: '2026-10-11' }, { title: '三体' });
+
+    expect(gateway.sendToUser).toHaveBeenCalledWith(
+      'u1',
+      NOTIFICATION_EVENT,
+      expect.objectContaining({
+        type: NotificationType.LOAN_DUE_SOON,
+        message: '"三体" is due back on 2026-10-11.',
+        link: '/my-page/book-lending',
+      }),
+    );
+  });
+
+  it('tells the borrower when a loan is overdue', async () => {
+    const { service, gateway } = buildService();
+
+    await service.loanOverdue({ userId: 'u1', dueDate: '2026-09-20' }, { title: 'Dune' });
+
+    expect(gateway.sendToUser).toHaveBeenCalledWith(
+      'u1',
+      NOTIFICATION_EVENT,
+      expect.objectContaining({
+        type: NotificationType.LOAN_OVERDUE,
+        message: '"Dune" was due back on 2026-09-20. Please return it as soon as you can.',
+      }),
+    );
+  });
+
+  it('sends lending staff one summary, and nothing when no loan went overdue', async () => {
+    const { service, repository, gateway } = buildService(['staff']);
+
+    await service.loansOverdueSummary(0);
+    expect(repository.query).not.toHaveBeenCalled();
+
+    await service.loansOverdueSummary(2);
+    expect(repository.query.mock.calls[0][1]).toEqual(['book_lending:approve', 'book_lending:approve']);
+    expect(gateway.sendToUser).toHaveBeenCalledWith(
+      'staff',
+      NOTIFICATION_EVENT,
+      expect.objectContaining({ message: '2 loans have just become overdue.', link: '/manager/lending' }),
+    );
+  });
+});
