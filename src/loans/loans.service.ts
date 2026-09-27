@@ -187,7 +187,12 @@ export class LoansService {
       const book = await this.assertBorrowable(manager, loan.bookId);
       await this.adjustAvailableCopies(manager, loan.bookId, -1);
 
+      // The loan period starts when the book is handed over, not when it was
+      // requested: a request that waited would otherwise lose those days, or be
+      // overdue the moment it is approved.
       loan.status = LoanStatus.ACTIVE;
+      loan.borrowDate = todayDateOnly();
+      loan.dueDate = addDays(loan.borrowDate, DEFAULT_LOAN_DAYS);
       return { loan: await manager.save(Loan, loan), book };
     });
 

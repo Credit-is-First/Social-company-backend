@@ -54,8 +54,8 @@ function makeLoan(overrides: Partial<Loan> = {}): Loan {
     bookId: BOOK_ID,
     userId: USER_ID,
     status: LoanStatus.PENDING,
-    borrowDate: new Date('2026-01-01'),
-    dueDate: new Date('2026-01-15'),
+    borrowDate: '2026-01-01',
+    dueDate: '2026-01-15',
     returnDate: null,
     ...overrides,
   } as Loan;
@@ -621,5 +621,23 @@ describe('LoansService calendar dates', () => {
 
     expect(loan.returnDate).toBe('2026-09-20');
     expect(loan.status).toBe(LoanStatus.RETURNED);
+  });
+});
+
+describe('LoansService loan period', () => {
+  it('starts the loan period when a request is approved, not when it was made', async () => {
+    const world = freshWorld();
+    // Requested 20 days ago: under the old rule it would be due 6 days ago.
+    world.loans['loan-1'] = makeLoan({ borrowDate: addDays(todayDateOnly(), -20), dueDate: addDays(todayDateOnly(), -6) });
+    const { service, notifications } = buildService(world);
+
+    const loan = await service.approve('loan-1');
+
+    expect(loan.borrowDate).toBe(todayDateOnly());
+    expect(loan.dueDate).toBe(addDays(todayDateOnly(), 14));
+    expect(notifications.loanApproved).toHaveBeenCalledWith(
+      expect.objectContaining({ dueDate: addDays(todayDateOnly(), 14) }),
+      expect.anything(),
+    );
   });
 });
