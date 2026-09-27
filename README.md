@@ -30,15 +30,24 @@ without it.
 |---|---|---|
 | `JWT_SECRET` | — (required) | Use a long random string: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `JWT_EXPIRES_IN` | `15m` | Access tokens cannot be revoked early, so keep this short |
+| `REFRESH_TOKEN_TTL_DAYS` | `7` | Lifetime of a refresh token (the sign-in cookie) |
+| `REFRESH_REUSE_GRACE_MS` | `30000` | A just-used refresh token presented again within this window is treated as two tabs racing, not theft |
+| `COOKIE_SECURE` / `COOKIE_SAME_SITE` / `COOKIE_DOMAIN` | secure in production / `strict` / — | Refresh cookie; `none` requires `COOKIE_SECURE=true` |
+| `RATE_LIMIT_ENABLED` | `true` | Turn off only for load testing |
 | `PORT` | `5001` | |
-| `DB_HOST` / `DB_PORT` / `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME` | | MySQL connection |
+| `NODE_ENV` | `development` | `production` disables Swagger, secures cookies and turns off SQL logging |
+| `DB_HOST` / `DB_PORT` / `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME` | — / `3306` / — / — / — | MySQL connection |
 | `DB_MIGRATIONS_RUN` | `true` | Migrations run at startup |
 | `DB_SYNCHRONIZE` | `false` | The schema is owned by migrations; leave this off |
-| `CORS_ORIGINS` | `http://localhost:5000` | Comma-separated |
+| `DB_LOGGING` | on unless production | SQL query logging |
+| `CORS_ORIGINS` | `http://localhost:5000` | Comma-separated; also the only origins allowed to open a notification socket |
+| `LOAN_REMINDER_INTERVAL_MINUTES` | `60` | How often overdue loans are marked and reminders sent; `0` turns it off |
+| `LOAN_DUE_SOON_DAYS` | `1` | The one "due soon" reminder goes out this many days before the due date |
+| `OVERDUE_REMINDER_REPEAT_DAYS` | `7` | An overdue loan is reminded again this often until returned |
 | `UPLOADS_DIR` | `uploads` | Ebooks and profile photos; never served statically |
 | `MAX_EBOOK_BYTES` / `MAX_CSV_BYTES` / `MAX_PHOTO_BYTES` | 50 MB / 10 MB / 5 MB | Upload limits |
-
-See `.env.example` for the refresh-token, cookie and rate-limit settings.
+| `SEED_MEMBER_PASSWORD` | random | Password for the members `npm run seed:overdue` creates |
+| `E2E_DB_NAME` | `library_e2e_db` | Schema the e2e suite drops and recreates |
 
 ## Scripts
 
@@ -46,14 +55,15 @@ See `.env.example` for the refresh-token, cookie and rate-limit settings.
 npm run start:dev          # watch mode on http://localhost:5001, Swagger at /api (dev only)
 npm run build              # compile to dist/
 npm run start:prod         # run dist/main
-npm test                   # unit tests — no database needed
+npm test                   # 203 unit tests in 12 suites — no database needed
 npm run test:e2e           # end-to-end — needs MySQL; uses its own E2E_DB_NAME schema
 npm run migration:generate -- Name   # generate against an EMPTY database
 npm run migration:run
 npm run migration:revert
 npm run seed               # all sample data (books, then overdue loans)
 npm run seed -- books      # only the sample books from temp_data/books.json
-npm run seed:overdue       # four sample members with overdue loans (1–25 days late)
+npm run seed:overdue       # four sample members with overdue loans (1–25 days late);
+                           # same as npm run seed -- overdue
 ```
 
 `seed:overdue` needs approved books with a spare copy; it issues the loans through
@@ -82,20 +92,26 @@ src/
 ├── roles/        role catalogue (roles.constants.ts) and default groups
 ├── groups/       groups of roles
 ├── books/        catalogue, approval workflow, ebook upload/download, CSV import/export
-├── loans/        lending lifecycle and copy accounting
+├── loans/        lending lifecycle, copy accounting, overdue marking and reminders
 ├── dashboard/    aggregate statistics
 ├── notifications/ stored notifications, socket.io gateway, bell API
-├── common/       rate-limit decorator and guard
+├── common/       rate-limit decorator and guard; date-only.ts (calendar dates)
 ├── config/env.ts all configuration, read and validated once
 ├── migrations/   TypeORM migrations (own the schema)
-└── seed/         sample data
+└── seed/         sample data (books; members with overdue loans)
 ```
+
+Migrations, in order: `InitialSchema`, `AddProfileFields`, `AddNotifications`,
+`AddBookSubmitter` (`books.submittedBy`), `AddLoanReminderTracking`
+(`loans.dueSoonNotifiedAt` / `overdueNotifiedAt`).
 
 ## Conventions worth knowing
 
-- Every request body and query string is bound to a DTO class; the global
+- Request bodies and most query strings are bound to DTO classes; the global
   validation pipe whitelists fields. Inline object types on controller
-  parameters are erased at runtime and silently skip validation.
+  parameters are erased at runtime and silently skip validation. A few simple
+  query parameters (`GET /notifications?limit`, `GET /loans?userId&bookId`) are
+  read individually with `@Query('name')` and checked in the service.
 - Secrets (`password`, `securityAnswer`) are stripped by `@Exclude()` on the
   entity plus the global serializer, which does not descend into plain wrapper
   objects — serialise the entity itself if you return `{ user: ... }`.
@@ -112,7 +128,8 @@ src/
   nobody can grant or remove a role they do not hold, or reset the password of
   an account holding one. New code that changes roles must call it too. The
   Super Admin group's roles are fixed; the role changes hands only through
-  `POST /users/:id/transfer-super-admin`.
+  `POST /users/:id/transfer-super-admin`. (Blocking and deleting users do not
+  call it yet — see the project README's Known gaps.)
 - Notifications are sent through `NotificationsService` only after the change
   that caused them has been saved (for loans, after the transaction commits), and
   never throw: a delivery failure is logged, not reported as a failed action.
