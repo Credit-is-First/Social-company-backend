@@ -237,9 +237,14 @@ export class BooksController {
       },
     },
   })
-  update(@Param('id') id: string, @Body() updateBookDto: UpdateBookDto, @UploadedFile() file?: Express.Multer.File) {
+  update(
+    @Param('id') id: string,
+    @Body() updateBookDto: UpdateBookDto,
+    @UploadedFile() file?: Express.Multer.File,
+    @CurrentUser() user?: User,
+  ) {
     const { requestReview, ...bookData } = updateBookDto;
-    return this.booksService.update(id, bookData, file, requestReview);
+    return this.booksService.update(id, bookData, file, requestReview, user && user.id);
   }
 
   @Delete(':id')

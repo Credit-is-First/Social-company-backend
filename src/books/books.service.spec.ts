@@ -38,6 +38,8 @@ function buildService() {
     loanDeclined: jest.fn(async () => undefined),
     bookAwaitingReview: jest.fn(async () => undefined),
     booksAwaitingReview: jest.fn(async () => undefined),
+    bookApproved: jest.fn(async () => undefined),
+    bookDeclined: jest.fn(async () => undefined),
   };
 
   return {
@@ -356,10 +358,79 @@ describe('BooksService review notifications', () => {
     const { service, booksRepository, notifications } = buildService();
     booksRepository.findOne.mockResolvedValueOnce({ id: 'b1', title: 'Dune', isbn: '111', status: BookStatus.DECLINED });
 
-    await service.update('b1', {} as any, undefined, true);
+    await service.update('b1', {} as any, undefined, true, 'm1');
 
     expect(notifications.bookAwaitingReview).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Dune', status: BookStatus.REVIEWING }),
+      'm1',
     );
+  });
+});
+
+describe('BooksService submitter notifications', () => {
+  const dto = { title: 'Dune', author: 'Herbert', isbn: '111', category: 'SciFi', totalCopies: 1 } as any;
+
+  it('records who submitted a new book', async () => {
+    const { service, saved } = buildService();
+
+    await service.create(dto, undefined, { id: 'm1', hasRole: () => false });
+
+    expect(saved[0].submittedBy).toBe('m1');
+  });
+
+  it('records whoever sends a book back for review as its submitter', async () => {
+    const { service, booksRepository, saved } = buildService();
+    booksRepository.findOne.mockResolvedValueOnce({ id: 'b1', title: 'Dune', isbn: '111', status: BookStatus.DECLINED, submittedBy: 'old' });
+
+    await service.update('b1', {} as any, undefined, true, 'm2');
+
+    expect(saved[0].submittedBy).toBe('m2');
+  });
+
+  it('keeps the submitter on an ordinary edit', async () => {
+    const { service, booksRepository, saved } = buildService();
+    booksRepository.findOne.mockResolvedValueOnce({ id: 'b1', title: 'Dune', isbn: '111', status: BookStatus.WORKING, submittedBy: 'm1' });
+
+    await service.update('b1', { title: 'Dune (2nd ed.)' } as any, undefined, false, 'editor');
+
+    expect(saved[0].submittedBy).toBe('m1');
+  });
+
+  it('tells the submitter when their book is approved', async () => {
+    const { service, booksRepository, notifications } = buildService();
+    booksRepository.findOne.mockResolvedValueOnce({ id: 'b1', title: 'Dune', status: BookStatus.REVIEWING, submittedBy: 'm1' });
+
+    await service.approve('b1', 'approver');
+
+    expect(notifications.bookApproved).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Dune', status: BookStatus.APPROVED, submittedBy: 'm1' }),
+      'approver',
+    );
+  });
+
+  it('tells the submitter when their book is declined, with the reason', async () => {
+    const { service, booksRepository, notifications } = buildService();
+    booksRepository.findOne.mockResolvedValueOnce({ id: 'b1', title: 'Dune', status: BookStatus.REVIEWING, submittedBy: 'm1' });
+
+    await service.decline('b1', 'approver', 'Wrong ISBN');
+
+    expect(notifications.bookDeclined).toHaveBeenCalledWith(
+      expect.objectContaining({ status: BookStatus.DECLINED, submittedBy: 'm1' }),
+      'approver',
+      'Wrong ISBN',
+    );
+  });
+
+  it('sends nothing when the status does not change', async () => {
+    const { service, booksRepository, notifications } = buildService();
+    booksRepository.findOne
+      .mockResolvedValueOnce({ id: 'b1', title: 'Dune', status: BookStatus.APPROVED, submittedBy: 'm1' })
+      .mockResolvedValueOnce({ id: 'b1', title: 'Dune', status: BookStatus.DECLINED, submittedBy: 'm1' });
+
+    await service.approve('b1', 'approver');
+    await service.decline('b1', 'approver', 'Still wrong');
+
+    expect(notifications.bookApproved).not.toHaveBeenCalled();
+    expect(notifications.bookDeclined).not.toHaveBeenCalled();
   });
 });

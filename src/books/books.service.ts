@@ -120,6 +120,7 @@ export class BooksService {
       publishedDate: createBookDto.publishedDate ? new Date(createBookDto.publishedDate) : undefined,
       isEbook: createBookDto.isEbook || false,
       status,
+      submittedBy: (user && user.id) || null,
     };
 
     if (status === BookStatus.APPROVED && user && user.id) {
@@ -142,21 +143,34 @@ export class BooksService {
 
   async approve(id: string, userId: string): Promise<Book> {
     const book = await this.findOne(id);
+    const wasApproved = book.status === BookStatus.APPROVED;
     book.status = BookStatus.APPROVED;
     book.approvedBy = userId;
     book.approvedAt = new Date();
     book.rejectionReason = null; // Clear rejection reason when approving
     book.deprecationReason = null; // Clear deprecation reason when approving
-    return await this.booksRepository.save(book);
+    const saved = await this.booksRepository.save(book);
+
+    // Approving an already-approved book again is not news to the submitter.
+    if (!wasApproved) {
+      await this.notifications.bookApproved(saved, userId);
+    }
+    return saved;
   }
 
   async decline(id: string, userId: string, reason?: string): Promise<Book> {
     const book = await this.findOne(id);
+    const wasDeclined = book.status === BookStatus.DECLINED;
     book.status = BookStatus.DECLINED;
     book.approvedBy = userId;
     book.approvedAt = new Date();
     book.rejectionReason = reason || null;
-    return await this.booksRepository.save(book);
+    const saved = await this.booksRepository.save(book);
+
+    if (!wasDeclined) {
+      await this.notifications.bookDeclined(saved, userId, saved.rejectionReason);
+    }
+    return saved;
   }
 
   async deprecate(id: string, userId: string, reason?: string): Promise<Book> {
@@ -174,6 +188,7 @@ export class BooksService {
     updateBookDto: UpdateBookDto,
     file?: Express.Multer.File,
     requestReview?: boolean,
+    actorId?: string,
   ): Promise<Book> {
     const book = await this.findOne(id);
 
@@ -194,6 +209,10 @@ export class BooksService {
       book.rejectionReason = null; // Clear rejection reason when requesting review
       book.approvedBy = null;
       book.approvedAt = null;
+      // Whoever sends it back for review is the one waiting on the decision.
+      if (actorId) {
+        book.submittedBy = actorId;
+      }
     }
 
     // If editing a deprecated book, change status to working
@@ -241,7 +260,7 @@ export class BooksService {
 
     const saved = await this.booksRepository.save(book);
     if (enteredReview) {
-      await this.notifications.bookAwaitingReview(saved);
+      await this.notifications.bookAwaitingReview(saved, actorId);
     }
     return saved;
   }

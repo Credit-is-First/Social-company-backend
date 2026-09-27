@@ -199,3 +199,52 @@ describe('NotificationsService reading', () => {
     expect(gateway.sendToUser).toHaveBeenCalledWith('u1', NOTIFICATIONS_READ_EVENT, { ids: 'all', unreadCount: 0 });
   });
 });
+
+describe('NotificationsService book decisions', () => {
+  it('tells the submitter their book was approved', async () => {
+    const { service, gateway } = buildService();
+
+    await service.bookApproved({ title: 'Dune', submittedBy: 'm1' }, 'approver');
+
+    expect(gateway.sendToUser).toHaveBeenCalledWith(
+      'm1',
+      NOTIFICATION_EVENT,
+      expect.objectContaining({
+        type: NotificationType.BOOK_APPROVED,
+        message: '"Dune" was approved and is now in the catalogue.',
+        link: '/manager/books',
+      }),
+    );
+  });
+
+  it('tells the submitter their book was declined, with the reason', async () => {
+    const { service, gateway } = buildService();
+
+    await service.bookDeclined({ title: 'Dune', submittedBy: 'm1' }, 'approver', 'Wrong ISBN');
+
+    expect(gateway.sendToUser).toHaveBeenCalledWith(
+      'm1',
+      NOTIFICATION_EVENT,
+      expect.objectContaining({ type: NotificationType.BOOK_DECLINED, message: '"Dune" was declined. Reason: Wrong ISBN' }),
+    );
+  });
+
+  it('says nothing to someone reviewing their own book, or when nobody submitted it', async () => {
+    const { service, repository } = buildService();
+
+    await service.bookApproved({ title: 'Dune', submittedBy: 'u1' }, 'u1');
+    await service.bookDeclined({ title: 'Dune', submittedBy: null }, 'u1', 'x');
+
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it('keeps a long decline reason within the message column', async () => {
+    const { service, repository } = buildService();
+
+    await service.bookDeclined({ title: 'Dune', submittedBy: 'm1' }, 'approver', 'x'.repeat(2000));
+
+    const message = repository.save.mock.calls[0][0][0].message;
+    expect(message.length).toBe(500);
+    expect(message.endsWith('…')).toBe(true);
+  });
+});

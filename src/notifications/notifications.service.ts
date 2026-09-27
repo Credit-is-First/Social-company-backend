@@ -33,6 +33,14 @@ interface LoanRef {
 const formatDate = (value: Date | string | undefined): string =>
   value ? new Date(value).toISOString().slice(0, 10) : '';
 
+/** Lengths of the notifications.title and .message columns. */
+const TITLE_MAX = 200;
+const MESSAGE_MAX = 500;
+
+/** Book titles, authors and decline reasons are long free text; fit the columns. */
+const truncate = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -102,6 +110,38 @@ export class NotificationsService {
     );
   }
 
+  /**
+   * Tells whoever submitted a book that it was approved. Nobody is told about
+   * their own decision, and books with no recorded submitter send nothing.
+   */
+  bookApproved(book: BookRef & { submittedBy?: string | null }, reviewerId: string): Promise<void> {
+    if (!book.submittedBy || book.submittedBy === reviewerId) {
+      return Promise.resolve();
+    }
+    return this.safely(() =>
+      this.notifyUsers([book.submittedBy as string], {
+        type: NotificationType.BOOK_APPROVED,
+        title: 'Book approved',
+        message: `"${book.title}" was approved and is now in the catalogue.`,
+        link: '/manager/books',
+      }),
+    );
+  }
+
+  bookDeclined(book: BookRef & { submittedBy?: string | null }, reviewerId: string, reason?: string | null): Promise<void> {
+    if (!book.submittedBy || book.submittedBy === reviewerId) {
+      return Promise.resolve();
+    }
+    return this.safely(() =>
+      this.notifyUsers([book.submittedBy as string], {
+        type: NotificationType.BOOK_DECLINED,
+        title: 'Book declined',
+        message: `"${book.title}" was declined.${reason ? ` Reason: ${reason}` : ''}`,
+        link: '/manager/books',
+      }),
+    );
+  }
+
   /** One summary for a CSV import instead of one alert per row. */
   booksAwaitingReview(count: number, actorId?: string): Promise<void> {
     if (count <= 0) {
@@ -137,8 +177,8 @@ export class NotificationsService {
         this.notificationsRepository.create({
           userId,
           type: input.type,
-          title: input.title,
-          message: input.message,
+          title: truncate(input.title, TITLE_MAX),
+          message: truncate(input.message, MESSAGE_MAX),
           link: input.link || null,
           readAt: null,
         }),

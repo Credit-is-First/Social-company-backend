@@ -73,6 +73,19 @@ export class Book {
   @JoinColumn({ name: 'approvedBy' })
   approvedByUser: User;
 
+  /**
+   * Who last sent the book for review (on creation, or by requesting review
+   * again), so they can be told when it is approved or declined. Null for
+   * books created before this was recorded, or whose submitter was deleted.
+   */
+  @ApiProperty({ required: false })
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  submittedBy: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'submittedBy' })
+  submittedByUser: User;
+
   @ApiProperty({ required: false })
   @Column({ type: 'timestamp', nullable: true })
   approvedAt: Date;

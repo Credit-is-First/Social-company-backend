@@ -8,6 +8,8 @@ export enum NotificationType {
   LOAN_APPROVED = 'loan_approved',
   LOAN_DECLINED = 'loan_declined',
   BOOK_REVIEW_REQUESTED = 'book_review_requested',
+  BOOK_APPROVED = 'book_approved',
+  BOOK_DECLINED = 'book_declined',
 }
 
 /**
