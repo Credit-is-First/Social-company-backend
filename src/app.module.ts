@@ -9,12 +9,14 @@ import { AuthModule } from './auth/auth.module';
 import { RolesModule } from './roles/roles.module';
 import { GroupsModule } from './groups/groups.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { Book } from './books/entities/book.entity';
 import { User } from './users/entities/user.entity';
 import { Loan } from './loans/entities/loan.entity';
 import { Role } from './roles/entities/role.entity';
 import { Group } from './groups/entities/group.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
+import { Notification } from './notifications/entities/notification.entity';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
@@ -29,7 +31,7 @@ import { join } from 'path';
       username: env.database.username,
       password: env.database.password,
       database: env.database.name,
-      entities: [Book, User, Loan, Role, Group, RefreshToken],
+      entities: [Book, User, Loan, Role, Group, RefreshToken, Notification],
       // Glob covers both the compiled output and ts-node runs (npm run seed).
       migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
       migrationsRun: env.database.migrationsRun,
@@ -43,6 +45,7 @@ import { join } from 'path';
     UsersModule,
     LoansModule,
     DashboardModule,
+    NotificationsModule,
   ],
   providers: [
     {

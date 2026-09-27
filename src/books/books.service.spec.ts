@@ -32,9 +32,17 @@ function buildService() {
   };
 
   const loansRepository: any = { count: jest.fn(async () => 0) };
+  const notifications: any = {
+    loanRequested: jest.fn(async () => undefined),
+    loanApproved: jest.fn(async () => undefined),
+    loanDeclined: jest.fn(async () => undefined),
+    bookAwaitingReview: jest.fn(async () => undefined),
+    booksAwaitingReview: jest.fn(async () => undefined),
+  };
 
   return {
-    service: new BooksService(booksRepository, loansRepository),
+    service: new BooksService(booksRepository, loansRepository, notifications),
+    notifications,
     booksRepository,
     queryBuilder,
     saved,
@@ -304,5 +312,54 @@ describe('BooksService.exportToCSV', () => {
 
     expect(csv.charAt(0)).toBe(UTF8_BOM);
     expect(csv.slice(1).split('\n')[1]).toMatch(/^三体,刘慈欣,9787536692930,科幻,3,3,approved,No,/);
+  });
+});
+
+describe('BooksService review notifications', () => {
+  const dto = { title: 'Dune', author: 'Herbert', isbn: '111', category: 'SciFi', totalCopies: 1 } as any;
+
+  it('tells book approvers when a new book enters review', async () => {
+    const { service, notifications } = buildService();
+    const member = { id: 'm1', hasRole: () => false };
+
+    await service.create(dto, undefined, member);
+
+    expect(notifications.bookAwaitingReview).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Dune', status: BookStatus.REVIEWING }),
+      'm1',
+    );
+  });
+
+  it('sends nothing for a book an approver adds (it is approved at once)', async () => {
+    const { service, notifications } = buildService();
+    const approver = { id: 'u1', hasRole: (role: string) => role === 'book:approve' };
+
+    await service.create(dto, undefined, approver);
+
+    expect(notifications.bookAwaitingReview).not.toHaveBeenCalled();
+  });
+
+  it('sends one summary for a CSV import instead of one alert per row', async () => {
+    const { service, notifications } = buildService();
+
+    await service.importFromCSV(
+      `${HEADER}\nDune,Herbert,111,SciFi,1,1,reviewing,No\nEmma,Austen,222,Classic,1,1,reviewing,No`,
+      { id: 'm1', hasRole: () => false },
+    );
+
+    expect(notifications.bookAwaitingReview).not.toHaveBeenCalled();
+    expect(notifications.booksAwaitingReview).toHaveBeenCalledTimes(1);
+    expect(notifications.booksAwaitingReview).toHaveBeenCalledWith(2, 'm1');
+  });
+
+  it('tells book approvers when a declined book is sent back for review', async () => {
+    const { service, booksRepository, notifications } = buildService();
+    booksRepository.findOne.mockResolvedValueOnce({ id: 'b1', title: 'Dune', isbn: '111', status: BookStatus.DECLINED });
+
+    await service.update('b1', {} as any, undefined, true);
+
+    expect(notifications.bookAwaitingReview).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Dune', status: BookStatus.REVIEWING }),
+    );
   });
 });

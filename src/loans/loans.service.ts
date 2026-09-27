@@ -6,6 +6,7 @@ import { UpdateLoanDto } from './dto/update-loan.dto';
 import { Loan, LoanStatus } from './entities/loan.entity';
 import { Book, BookStatus } from '../books/entities/book.entity';
 import { User } from '../users/entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const DEFAULT_LOAN_DAYS = 14;
 
@@ -29,6 +30,7 @@ export class LoansService {
     private usersRepository: Repository<User>,
     @InjectConnection()
     private connection: Connection,
+    private notifications: NotificationsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -129,7 +131,9 @@ export class LoansService {
       throw new BadRequestException('bookId is required');
     }
 
-    return await this.connection.transaction(async manager => {
+    // Notifications go out only after the transaction has committed, so nobody
+    // is told about a loan that was rolled back.
+    const { loan, user, book } = await this.connection.transaction(async manager => {
       const book = await this.assertBorrowable(manager, bookId);
       if (book.availableCopies <= 0) {
         throw new BadRequestException('No available copies of this book');
@@ -163,37 +167,49 @@ export class LoansService {
         dueDate,
         status: LoanStatus.PENDING,
       });
-      return await manager.save(Loan, loan);
+      return { loan: await manager.save(Loan, loan), user, book };
     });
+
+    await this.notifications.loanRequested(user, book);
+    return loan;
   }
 
   async approve(id: string): Promise<Loan> {
-    return await this.connection.transaction(async manager => {
+    const { loan, book } = await this.connection.transaction(async manager => {
       const loan = await this.findOneWithin(manager, id);
 
       if (loan.status !== LoanStatus.PENDING) {
         throw new BadRequestException('Only pending loans can be approved');
       }
 
-      await this.assertBorrowable(manager, loan.bookId);
+      const book = await this.assertBorrowable(manager, loan.bookId);
       await this.adjustAvailableCopies(manager, loan.bookId, -1);
 
       loan.status = LoanStatus.ACTIVE;
-      return await manager.save(Loan, loan);
+      return { loan: await manager.save(Loan, loan), book };
     });
+
+    await this.notifications.loanApproved(loan, book);
+    return loan;
   }
 
   async decline(id: string): Promise<Loan> {
-    return await this.connection.transaction(async manager => {
+    const { loan, book } = await this.connection.transaction(async manager => {
       const loan = await this.findOneWithin(manager, id);
 
       if (loan.status !== LoanStatus.PENDING) {
         throw new BadRequestException('Only pending loans can be declined');
       }
 
+      const book = await manager.findOne(Book, loan.bookId);
       loan.status = LoanStatus.DECLINED;
-      return await manager.save(Loan, loan);
+      return { loan: await manager.save(Loan, loan), book };
     });
+
+    if (book) {
+      await this.notifications.loanDeclined(loan, book);
+    }
+    return loan;
   }
 
   /** Marks an outstanding loan as returned and puts the copy back. */

@@ -9,8 +9,9 @@ The full feature list, API reference and security notes are in the
 - **Node.js 12.1.0** (declared in `package.json` `engines`). The installed
   `node_modules` — including the native `bcrypt` binding — were built for it.
 - MySQL, with a database created for the app (`CREATE DATABASE library_db;`).
-- The project is developed offline: `npm install` cannot fetch new packages, so
-  work with what is already in `node_modules`.
+- Any new package must run on Node 12.1.0 (socket.io, for example, stays on 2.x to
+  match NestJS 7). Install it with the npm that ships with Node 12.1.0 (below), which
+  keeps `package-lock.json` in its existing v1 format.
 
 If Node 12.1.0 is not your default `node`, run npm through its own binary and
 pass `--scripts-prepend-node-path=true` so child tools (Nest CLI, Jest) use it too:
@@ -64,6 +65,7 @@ src/
 ├── books/        catalogue, approval workflow, ebook upload/download, CSV import/export
 ├── loans/        lending lifecycle and copy accounting
 ├── dashboard/    aggregate statistics
+├── notifications/ stored notifications, socket.io gateway, bell API
 ├── common/       rate-limit decorator and guard
 ├── config/env.ts all configuration, read and validated once
 ├── migrations/   TypeORM migrations (own the schema)
@@ -86,3 +88,8 @@ src/
   an account holding one. New code that changes roles must call it too. The
   Super Admin group's roles are fixed; the role changes hands only through
   `POST /users/:id/transfer-super-admin`.
+- Notifications are sent through `NotificationsService` only after the change
+  that caused them has been saved (for loans, after the transaction commits), and
+  never throw: a delivery failure is logged, not reported as a failed action.
+  Sockets authenticate with an `authenticate` message carrying the access token,
+  not a query-string token, and receive only their own user's room.

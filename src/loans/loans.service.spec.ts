@@ -114,8 +114,16 @@ function buildService(world: World) {
     transaction: jest.fn(async (cb: any) => cb(manager)),
   };
 
-  const service = new LoansService(loansRepository, {} as any, {} as any, connection);
-  return { service, manager, loansRepository, connection };
+  const notifications: any = {
+    loanRequested: jest.fn(async () => undefined),
+    loanApproved: jest.fn(async () => undefined),
+    loanDeclined: jest.fn(async () => undefined),
+    bookAwaitingReview: jest.fn(async () => undefined),
+    booksAwaitingReview: jest.fn(async () => undefined),
+  };
+
+  const service = new LoansService(loansRepository, {} as any, {} as any, connection, notifications);
+  return { service, manager, loansRepository, connection, notifications };
 }
 
 function freshWorld(bookOverrides: Partial<Book> = {}, userOverrides: Partial<User> = {}): World {
@@ -507,5 +515,62 @@ describe('LoansService copy accounting', () => {
       await service.returnLoan(request.id);
       expect(world.books[BOOK_ID].availableCopies).toBe(2);
     });
+  });
+});
+
+describe('LoansService notifications', () => {
+  it('tells lending approvers about a new request, after it is saved', async () => {
+    const world = freshWorld();
+    const { service, notifications } = buildService(world);
+
+    const loan = await service.createForUser(USER_ID, BOOK_ID);
+
+    expect(world.loans[loan.id]).toBeDefined();
+    expect(notifications.loanRequested).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER_ID, name: 'Borrower' }),
+      expect.objectContaining({ id: BOOK_ID, title: 'Test Book' }),
+    );
+  });
+
+  it('sends nothing when the request is refused', async () => {
+    const { service, notifications } = buildService(freshWorld({ status: BookStatus.REVIEWING }));
+
+    await expect(service.createForUser(USER_ID, BOOK_ID)).rejects.toBeInstanceOf(BadRequestException);
+    expect(notifications.loanRequested).not.toHaveBeenCalled();
+  });
+
+  it('tells the borrower their request was approved', async () => {
+    const world = freshWorld();
+    world.loans['loan-1'] = makeLoan();
+    const { service, notifications } = buildService(world);
+
+    await service.approve('loan-1');
+
+    expect(notifications.loanApproved).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID, status: LoanStatus.ACTIVE }),
+      expect.objectContaining({ title: 'Test Book' }),
+    );
+  });
+
+  it('tells the borrower their request was declined', async () => {
+    const world = freshWorld();
+    world.loans['loan-1'] = makeLoan();
+    const { service, notifications } = buildService(world);
+
+    await service.decline('loan-1');
+
+    expect(notifications.loanDeclined).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID, status: LoanStatus.DECLINED }),
+      expect.objectContaining({ title: 'Test Book' }),
+    );
+  });
+
+  it('sends nothing when approving a loan that is not pending', async () => {
+    const world = freshWorld();
+    world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+    const { service, notifications } = buildService(world);
+
+    await expect(service.approve('loan-1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(notifications.loanApproved).not.toHaveBeenCalled();
   });
 });

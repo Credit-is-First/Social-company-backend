@@ -7,6 +7,7 @@ import { BookFilterDto, PaginationDto, BOOK_SORT_FIELDS } from './dto/pagination
 import { Book, BookStatus } from './entities/book.entity';
 import { Loan } from '../loans/entities/loan.entity';
 import { UNREADABLE_CHAR, UTF8_BOM } from './csv-encoding';
+import { NotificationsService } from '../notifications/notifications.service';
 import { env } from '../config/env';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -24,6 +25,8 @@ export interface PaginatedBooks {
 interface CreateBookOverrides {
   status?: BookStatus;
   availableCopies?: number;
+  /** False when the caller sends its own summary notification (CSV import). */
+  notify?: boolean;
 }
 
 @Injectable()
@@ -33,6 +36,7 @@ export class BooksService {
     private booksRepository: Repository<Book>,
     @InjectRepository(Loan)
     private loansRepository: Repository<Loan>,
+    private notifications: NotificationsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -128,8 +132,12 @@ export class BooksService {
       bookData.filePath = this.storeEbook(file);
     }
 
-    const book = this.booksRepository.create(bookData);
-    return await this.booksRepository.save(book);
+    const book = await this.booksRepository.save(this.booksRepository.create(bookData));
+
+    if (book.status === BookStatus.REVIEWING && overrides.notify !== false) {
+      await this.notifications.bookAwaitingReview(book, user && user.id);
+    }
+    return book;
   }
 
   async approve(id: string, userId: string): Promise<Book> {
@@ -177,7 +185,10 @@ export class BooksService {
     // Allow editing declined books - they can be edited and then request review
 
     // If requesting review from deprecated, working, or declined book, change status to reviewing
-    if (requestReview && (book.status === BookStatus.DEPRECATED || book.status === BookStatus.WORKING || book.status === BookStatus.DECLINED)) {
+    const enteredReview =
+      !!requestReview &&
+      (book.status === BookStatus.DEPRECATED || book.status === BookStatus.WORKING || book.status === BookStatus.DECLINED);
+    if (enteredReview) {
       book.status = BookStatus.REVIEWING;
       book.deprecationReason = null; // Clear deprecation reason when requesting review
       book.rejectionReason = null; // Clear rejection reason when requesting review
@@ -228,7 +239,11 @@ export class BooksService {
     if (updateBookDto.description !== undefined) book.description = updateBookDto.description;
     if (updateBookDto.isEbook !== undefined) book.isEbook = updateBookDto.isEbook;
 
-    return await this.booksRepository.save(book);
+    const saved = await this.booksRepository.save(book);
+    if (enteredReview) {
+      await this.notifications.bookAwaitingReview(saved);
+    }
+    return saved;
   }
 
   async remove(id: string): Promise<void> {
@@ -566,6 +581,8 @@ export class BooksService {
     // Only an approver may import rows that are already approved; for everyone
     // else the requested status is ignored and the book enters review.
     const canApprove = (user && typeof user.hasRole === 'function' && user.hasRole('book:approve')) || false;
+    // One summary alert for the whole import rather than one per row.
+    let awaitingReview = 0;
 
     for (let i = 0; i < books.length; i++) {
       const bookData = books[i];
@@ -584,10 +601,14 @@ export class BooksService {
         };
 
         // Columns the UI advertises as supported, now actually honoured.
-        await this.create(createBookDto, undefined, user, {
+        const created = await this.create(createBookDto, undefined, user, {
           status: canApprove && bookData.status ? (bookData.status as BookStatus) : undefined,
           availableCopies: bookData.availableCopies,
+          notify: false,
         });
+        if (created.status === BookStatus.REVIEWING) {
+          awaitingReview++;
+        }
 
         results.push({
           row: rowNumber,
@@ -605,6 +626,8 @@ export class BooksService {
         errorCount++;
       }
     }
+
+    await this.notifications.booksAwaitingReview(awaitingReview, user && user.id);
 
     return {
       success: successCount,
