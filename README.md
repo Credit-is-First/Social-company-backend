@@ -51,8 +51,16 @@ npm run test:e2e           # end-to-end — needs MySQL; uses its own E2E_DB_NAM
 npm run migration:generate -- Name   # generate against an EMPTY database
 npm run migration:run
 npm run migration:revert
-npm run seed               # sample books from temp_data/books.json
+npm run seed               # all sample data (books, then overdue loans)
+npm run seed -- books      # only the sample books from temp_data/books.json
+npm run seed:overdue       # four sample members with overdue loans (1–25 days late)
 ```
+
+`seed:overdue` needs approved books with a spare copy; it issues the loans through
+the normal staff path (so copies are taken) and leaves them un-reminded, so the next
+"Send reminders" or hourly run notifies the borrowers and staff. Re-running it skips
+members who already have an open loan. The sample members' password is
+`SEED_MEMBER_PASSWORD` if set, otherwise a random one that is never shown.
 
 ## Layout
 
