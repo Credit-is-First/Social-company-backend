@@ -125,6 +125,15 @@ export class UsersController {
     return this.usersService.updateUserRoles(actor, id, body.roleIds);
   }
 
+  @Post(':id/transfer-super-admin')
+  @HasRoles(Roles.USER_ROLE_UPDATE)
+  @ApiOperation({ summary: 'Hand the Super Admin role from the caller (its current holder) to this user' })
+  @ApiResponse({ status: 201, description: 'Transferred; returns the new holder', type: User })
+  @ApiResponse({ status: 403, description: 'The caller is not the Super Admin' })
+  transferSuperAdmin(@CurrentUser() actor: User, @Param('id') id: string) {
+    return this.usersService.transferSuperAdmin(actor, id);
+  }
+
   @Patch(':id/groups')
   @HasRoles(Roles.USER_ROLE_UPDATE)
   @ApiOperation({ summary: 'Update user groups' })

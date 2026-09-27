@@ -160,3 +160,69 @@ describe('UsersService privilege containment', () => {
     });
   });
 });
+
+describe('UsersService revocation, self-reset and Super Admin transfer', () => {
+  const admin = user('admin', [group('Admin', ADMIN_ROLES)]);
+  const superAdminGroup = group('Super Admin', [...ADMIN_ROLES, Roles.USER_DELETE]);
+
+  it('refuses to remove a group that takes away a role the caller lacks', async () => {
+    const member = user('member', [group('Deleters', [Roles.USER_DELETE])]);
+    const { service } = buildService({ member });
+
+    await expect(service.updateUserGroups(admin, 'member', [])).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('refuses to remove a direct role the caller lacks', async () => {
+    const member = user('member', [], [role(Roles.USER_DELETE)]);
+    const { service } = buildService({ member });
+
+    await expect(service.updateUserRoles(admin, 'member', [])).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows adding a group whose roles the user already holds elsewhere', async () => {
+    // Nothing is actually granted, so the caller's lack of user:delete does not matter.
+    const member = user('member', [], [role(Roles.USER_DELETE)]);
+    const { service } = buildService({ member });
+
+    const saved = await service.updateUserGroups(admin, 'member', ['group-Deleters']);
+
+    expect(saved.groups.map(g => g.name)).toEqual(['Deleters']);
+  });
+
+  it('refuses an admin resetting their own password through the admin endpoint', async () => {
+    const { service, usersRepository } = buildService({ admin });
+
+    await expect(service.resetUserPassword(admin, 'admin', 'new-password-123')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(usersRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('transfers the Super Admin group from the caller to the target in one save', async () => {
+    const holder = user('super', [superAdminGroup]);
+    const target = user('target', [group('Admin', ADMIN_ROLES)]);
+    const { service, usersRepository } = buildService({ super: holder, target });
+
+    await service.transferSuperAdmin(holder, 'target');
+
+    expect(usersRepository.save).toHaveBeenCalledTimes(1);
+    const [savedHolder, savedTarget] = usersRepository.save.mock.calls[0][0];
+    expect(savedHolder.groups.map((g: Group) => g.name)).toEqual([]);
+    expect(savedTarget.groups.map((g: Group) => g.name)).toEqual(['Admin', 'Super Admin']);
+  });
+
+  it('refuses a transfer by anyone but the current Super Admin', async () => {
+    const target = user('target');
+    const { service } = buildService({ admin, target });
+
+    await expect(service.transferSuperAdmin(admin, 'target')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('refuses a transfer to a blocked account', async () => {
+    const holder = user('super', [superAdminGroup]);
+    const target = Object.assign(user('target'), { blocked: true });
+    const { service } = buildService({ super: holder, target });
+
+    await expect(service.transferSuperAdmin(holder, 'target')).rejects.toThrow(/blocked/);
+  });
+});

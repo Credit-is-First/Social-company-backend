@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsArray, IsUUID, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsUUID } from 'class-validator';
 
 export class CreateGroupDto {
   @ApiProperty()
@@ -17,8 +17,5 @@ export class CreateGroupDto {
   @IsUUID('4', { each: true })
   roleIds?: string[];
 
-  @ApiPropertyOptional({ default: false })
-  @IsOptional()
-  @IsBoolean()
-  isDefault?: boolean;
+  // No isDefault: only the groups seeded at startup are default (undeletable).
 }

@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Group } from './entities/group.entity';
 import { Role } from '../roles/entities/role.entity';
 import { RolesService } from '../roles/roles.service';
-import { DEFAULT_GROUP_DEFINITIONS } from '../roles/roles.constants';
+import { DEFAULT_GROUP_DEFINITIONS, SUPER_ADMIN_GROUP } from '../roles/roles.constants';
+import { assertCanGrant, assertCanRevoke, diffRoleNames } from '../roles/privilege';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class GroupsService {
@@ -39,11 +41,30 @@ export class GroupsService {
     });
   }
 
+  /**
+   * Creates a group on a caller's behalf. Its roles are held to the same rule
+   * as assigning roles to a user: nobody can put a role they do not hold into
+   * a group, or they could join it (or already be in it) and gain the role.
+   * Only the default groups seeded at startup are `isDefault`; callers cannot
+   * create undeletable groups.
+   */
   async create(
+    actor: User,
+    data: { name: string; description?: string; roleIds?: string[] },
+  ): Promise<Group> {
+    const roles = data.roleIds && data.roleIds.length > 0
+      ? await Promise.all(data.roleIds.map(id => this.rolesService.findOne(id)))
+      : [];
+    assertCanGrant(actor, roles.map(role => role.name));
+
+    return await this.insertGroup(data.name, data.description, roles, false);
+  }
+
+  private async insertGroup(
     name: string,
-    description?: string,
-    roleIds?: string[],
-    isDefault: boolean = false,
+    description: string | undefined,
+    roles: Role[],
+    isDefault: boolean,
   ): Promise<Group> {
     const existingGroup = await this.findByName(name);
     if (existingGroup) {
@@ -55,18 +76,20 @@ export class GroupsService {
       description,
       isDefault,
     });
-
-    if (roleIds && roleIds.length > 0) {
-      const roles = await Promise.all(
-        roleIds.map(id => this.rolesService.findOne(id)),
-      );
-      group.roles = roles.filter(r => r !== undefined);
-    }
+    group.roles = roles;
 
     return await this.groupsRepository.save(group);
   }
 
+  /**
+   * Changes to a group's roles reach every member at once, so they follow the
+   * privilege rule too: the caller can only add roles they hold and only remove
+   * roles they hold. Without this an Admin could add `user:delete` to their own
+   * group, or empty the Super Admin group. The Super Admin group's roles are
+   * fixed outright — it holds every role by definition.
+   */
   async update(
+    actor: User,
     id: string,
     updateData: {
       name?: string;
@@ -98,19 +121,33 @@ export class GroupsService {
       const roles = await Promise.all(
         updateData.roleIds.map(roleId => this.rolesService.findOne(roleId)),
       );
-      group.roles = roles.filter(r => r !== undefined);
+      const { added, removed } = diffRoleNames(
+        (group.roles || []).map(role => role.name),
+        roles.map(role => role.name),
+      );
+
+      if (group.name === SUPER_ADMIN_GROUP && (added.length > 0 || removed.length > 0)) {
+        throw new ForbiddenException(`The ${SUPER_ADMIN_GROUP} group's roles are fixed: it holds every role`);
+      }
+      assertCanGrant(actor, added);
+      assertCanRevoke(actor, removed);
+
+      group.roles = roles;
     }
 
     return await this.groupsRepository.save(group);
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(actor: User, id: string): Promise<void> {
     const group = await this.findOne(id);
 
     // Prevent deleting default groups
     if (group.isDefault) {
       throw new BadRequestException('Cannot delete default groups');
     }
+
+    // Deleting a group takes its roles away from every member.
+    assertCanRevoke(actor, (group.roles || []).map(role => role.name));
 
     await this.groupsRepository.remove(group);
   }
@@ -130,7 +167,7 @@ export class GroupsService {
       let group = await this.findByName(definition.name);
 
       if (!group) {
-        group = await this.create(definition.name, definition.description, [], true);
+        group = await this.insertGroup(definition.name, definition.description, [], true);
       }
 
       const wanted = (await Promise.all(

@@ -453,6 +453,102 @@ describe('Library API (e2e)', () => {
         .expect(400));
   });
 
+  // An Admin-group account must not be able to raise its own privileges or take
+  // over the Super Admin, whichever endpoint it goes through.
+  describe('privilege containment', () => {
+    const deputy = { email: `e2e-deputy-${stamp}@test.local`, password: 'DeputyPass123' };
+    let deputyToken: string;
+    let deputyId: string;
+    let adminGroupId: string;
+    let superAdminGroupId: string;
+    let userDeleteRoleId: string;
+
+    const as = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+    it('sets up an account in the Admin group', async () => {
+      const groups = await request(http).get('/groups').set(as(adminToken)).expect(200);
+      adminGroupId = groups.body.find((g: any) => g.name === 'Admin').id;
+      superAdminGroupId = groups.body.find((g: any) => g.name === 'Super Admin').id;
+
+      const roles = await request(http).get('/roles').set(as(adminToken)).expect(200);
+      userDeleteRoleId = roles.body.find((r: any) => r.name === 'user:delete').id;
+
+      const created = await request(http)
+        .post('/users')
+        .set(as(adminToken))
+        .send({ name: 'Deputy', phone: '5555555555', groupIds: [adminGroupId], ...deputy })
+        .expect(201);
+      deputyId = created.body.id;
+
+      const login = await request(http).post('/auth/login').send(deputy).expect(200);
+      deputyToken = login.body.access_token;
+    });
+
+    it('refuses an Admin adding a role they lack to their own group', async () => {
+      const adminGroup = await request(http).get(`/groups/${adminGroupId}`).set(as(deputyToken)).expect(200);
+      const roleIds = adminGroup.body.roles.map((r: any) => r.id).concat([userDeleteRoleId]);
+
+      await request(http).patch(`/groups/${adminGroupId}`).set(as(deputyToken)).send({ roleIds }).expect(403);
+    });
+
+    it('refuses an Admin creating a group with a role they lack', () =>
+      request(http)
+        .post('/groups')
+        .set(as(deputyToken))
+        .send({ name: `e2e-escalate-${stamp}`, roleIds: [userDeleteRoleId] })
+        .expect(403));
+
+    it('refuses emptying the Super Admin group, even for the Super Admin', () =>
+      request(http).patch(`/groups/${superAdminGroupId}`).set(as(adminToken)).send({ roleIds: [] }).expect(403));
+
+    it('never creates a default (undeletable) group from the API', async () => {
+      const res = await request(http)
+        .post('/groups')
+        .set(as(adminToken))
+        .send({ name: `e2e-plain-${stamp}`, isDefault: true })
+        .expect(201);
+
+      expect(res.body.isDefault).toBe(false);
+    });
+
+    it('refuses an Admin resetting the Super Admin password', () =>
+      request(http)
+        .patch(`/users/${adminId}/reset-password`)
+        .set(as(deputyToken))
+        .send({ newPassword: 'TakeOver123' })
+        .expect(403));
+
+    it('refuses resetting your own password through the admin endpoint', () =>
+      request(http)
+        .patch(`/users/${deputyId}/reset-password`)
+        .set(as(deputyToken))
+        .send({ newPassword: 'NoCurrentPassword123' })
+        .expect(403));
+
+    it('refuses a Super Admin transfer by anyone but the holder', () =>
+      request(http).post(`/users/${deputyId}/transfer-super-admin`).set(as(deputyToken)).expect(403));
+
+    it('transfers the Super Admin role to another user and back', async () => {
+      const handedOver = await request(http)
+        .post(`/users/${deputyId}/transfer-super-admin`)
+        .set(as(adminToken))
+        .expect(201);
+      expect(handedOver.body.groups.map((g: any) => g.name)).toContain('Super Admin');
+
+      // Roles are re-read on every request, so the deputy's existing token now
+      // carries the role and the old holder's no longer does.
+      await request(http).get('/roles').set(as(adminToken)).expect(403);
+
+      const handedBack = await request(http)
+        .post(`/users/${adminId}/transfer-super-admin`)
+        .set(as(deputyToken))
+        .expect(201);
+      expect(handedBack.body.groups.map((g: any) => g.name)).toContain('Super Admin');
+
+      await request(http).get('/roles').set(as(adminToken)).expect(200);
+    });
+  });
+
   describe('lending lifecycle', () => {
     it('registers a borrower into the default group', async () => {
       await request(http).post('/auth/register').send(borrower).expect(201);

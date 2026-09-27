@@ -12,6 +12,7 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { RolesService } from '../roles/roles.service';
 import { GroupsService } from '../groups/groups.service';
 import { SUPER_ADMIN_GROUP, DEFAULT_MEMBER_GROUP, Roles } from '../roles/roles.constants';
+import { assertCanGrant, assertCanRevoke, assertCanActAs, diffRoleNames } from '../roles/privilege';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -45,47 +46,32 @@ export class UsersService {
     if (this.isSuperAdmin(user)) {
       throw new BadRequestException(
         `Cannot ${action} the Super Admin account — doing so would leave the system with no administrator. ` +
-          `Move the Super Admin group to another user first.`,
+          `Transfer the Super Admin role to another user first (POST /users/:id/transfer-super-admin).`,
       );
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Privilege containment
+  // Privilege containment (rules in ../roles/privilege.ts)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Nobody can hand out a role they do not hold themselves, directly or by way
-   * of a group. Without this an Admin could grant themselves (or a fresh
-   * account they control) every role, which is Super Admin in all but name.
-   *
-   * Only additions are checked, so editing a user who already holds roles the
-   * caller lacks still works as long as nothing new is being granted.
-   */
-  private assertCanGrant(actor: User, addedRoles: Role[], addedGroups: Group[]): void {
-    const held = actor.getAllRoleNames();
-    const granted: string[] = addedRoles.map(role => role.name);
-    addedGroups.forEach(group => (group.roles || []).forEach(role => granted.push(role.name)));
-
-    const beyondActor = granted.filter(name => held.indexOf(name) === -1);
-    if (beyondActor.length > 0) {
-      throw new ForbiddenException(
-        `You cannot grant roles you do not hold yourself: ${Array.from(new Set(beyondActor)).join(', ')}`,
-      );
-    }
+  /** Every role name a user would hold with these direct roles and groups. */
+  private effectiveRoleNames(roles: Role[], groups: Group[]): string[] {
+    const names = new Set<string>();
+    roles.forEach(role => names.add(role.name));
+    groups.forEach(group => (group.roles || []).forEach(role => names.add(role.name)));
+    return Array.from(names);
   }
 
   /**
-   * Taking over an account means taking over its roles, so resetting someone's
-   * password is only allowed when the caller already holds everything they do.
-   * This is what stops an Admin from resetting the Super Admin's password.
+   * Checks a change to a user's roles or groups by what they would actually
+   * gain and lose, not by which groups were ticked: adding a group whose roles
+   * the user already holds grants nothing, and dropping a group can revoke roles.
    */
-  private assertCanActAs(actor: User, target: User): void {
-    const held = actor.getAllRoleNames();
-    const beyondActor = target.getAllRoleNames().filter(name => held.indexOf(name) === -1);
-    if (beyondActor.length > 0) {
-      throw new ForbiddenException('You cannot reset the password of an account with more privileges than your own');
-    }
+  private assertCanChangeRoles(actor: User, before: string[], after: string[]): void {
+    const { added, removed } = diffRoleNames(before, after);
+    assertCanGrant(actor, added);
+    assertCanRevoke(actor, removed);
   }
 
   // ---------------------------------------------------------------------------
@@ -119,7 +105,7 @@ export class UsersService {
       );
     }
 
-    this.assertCanGrant(actor, roles, groups);
+    assertCanGrant(actor, this.effectiveRoleNames(roles, groups));
 
     const user = this.usersRepository.create({
       name: createUserDto.name,
@@ -154,8 +140,11 @@ export class UsersService {
       roleIds.map(roleId => this.rolesService.findOne(roleId))
     );
 
-    const currentIds = (user.roles || []).map(role => role.id);
-    this.assertCanGrant(actor, roles.filter(role => currentIds.indexOf(role.id) === -1), []);
+    this.assertCanChangeRoles(
+      actor,
+      user.getAllRoleNames(),
+      this.effectiveRoleNames(roles, user.groups || []),
+    );
 
     user.roles = roles;
     return await this.usersRepository.save(user);
@@ -172,7 +161,8 @@ export class UsersService {
     // Removing the sole Super Admin from their group locks everyone out.
     if (this.isSuperAdmin(user) && !keepsSuperAdmin) {
       throw new BadRequestException(
-        `Cannot remove the ${SUPER_ADMIN_GROUP} group from its only member. Assign it to another user first.`,
+        `Cannot remove the ${SUPER_ADMIN_GROUP} group from its only member. ` +
+          `Transfer it instead (POST /users/:id/transfer-super-admin).`,
       );
     }
 
@@ -187,12 +177,18 @@ export class UsersService {
         .getOne();
 
       if (existingSuperAdmin) {
-        throw new BadRequestException('Super Admin group can only have one member');
+        throw new BadRequestException(
+          `The ${SUPER_ADMIN_GROUP} group can only have one member. ` +
+            `Its current holder can transfer it (POST /users/:id/transfer-super-admin).`,
+        );
       }
     }
 
-    const currentIds = (user.groups || []).map(group => group.id);
-    this.assertCanGrant(actor, [], groups.filter(group => currentIds.indexOf(group.id) === -1));
+    this.assertCanChangeRoles(
+      actor,
+      user.getAllRoleNames(),
+      this.effectiveRoleNames(user.roles || [], groups),
+    );
 
     user.groups = groups;
     return await this.usersRepository.save(user);
@@ -226,9 +222,46 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
+  /**
+   * Hands the Super Admin group from its current holder (the caller) to another
+   * user in one save, so there is never a moment with none or two. The group is
+   * capped at one member, so this is the only way it can change hands.
+   */
+  async transferSuperAdmin(actor: User, targetId: string): Promise<User> {
+    if (!this.isSuperAdmin(actor)) {
+      throw new ForbiddenException(`Only the current ${SUPER_ADMIN_GROUP} can transfer the role`);
+    }
+    if (actor.id === targetId) {
+      throw new BadRequestException(`You already hold the ${SUPER_ADMIN_GROUP} role`);
+    }
+
+    const holder = await this.findOne(actor.id);
+    const target = await this.findOne(targetId);
+    if (target.blocked) {
+      throw new BadRequestException(`Cannot transfer the ${SUPER_ADMIN_GROUP} role to a blocked account`);
+    }
+
+    const superAdminGroup = (holder.groups || []).find(group => group.name === SUPER_ADMIN_GROUP);
+    holder.groups = (holder.groups || []).filter(group => group.name !== SUPER_ADMIN_GROUP);
+    target.groups = (target.groups || []).concat([superAdminGroup]);
+
+    // One save of both entities runs in a single transaction.
+    await this.usersRepository.save([holder, target]);
+
+    // The old holder's sessions carry no roles (they are re-read per request),
+    // so the change takes effect on their next request without revocation.
+    return await this.findOne(targetId);
+  }
+
   async resetUserPassword(actor: User, userId: string, newPassword: string): Promise<User> {
+    // The admin reset needs no current password, so using it on yourself would
+    // let a stolen session change the password without knowing the old one.
+    if (actor.id === userId) {
+      throw new ForbiddenException('Use Change Password to change your own password; it asks for your current one.');
+    }
+
     const user = await this.findOne(userId);
-    this.assertCanActAs(actor, user);
+    assertCanActAs(actor, user);
 
     user.password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     const saved = await this.usersRepository.save(user);

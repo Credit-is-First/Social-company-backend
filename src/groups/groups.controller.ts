@@ -8,6 +8,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { HasRoles } from '../auth/decorators/roles.decorator';
 import { Roles } from '../roles/roles.constants';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../users/entities/user.entity';
 
 @ApiTags('groups')
 @Controller('groups')
@@ -37,28 +39,23 @@ export class GroupsController {
   @HasRoles(Roles.GROUP_CREATE)
   @ApiOperation({ summary: 'Create a new group' })
   @ApiResponse({ status: 201, description: 'Group created successfully', type: Group })
-  create(@Body() createGroupDto: CreateGroupDto) {
-    return this.groupsService.create(
-      createGroupDto.name,
-      createGroupDto.description,
-      createGroupDto.roleIds,
-      createGroupDto.isDefault || false,
-    );
+  create(@CurrentUser() actor: User, @Body() createGroupDto: CreateGroupDto) {
+    return this.groupsService.create(actor, createGroupDto);
   }
 
   @Patch(':id')
   @HasRoles(Roles.GROUP_UPDATE)
   @ApiOperation({ summary: 'Update a group' })
   @ApiResponse({ status: 200, description: 'Group updated successfully', type: Group })
-  update(@Param('id') id: string, @Body() updateGroupDto: UpdateGroupDto) {
-    return this.groupsService.update(id, updateGroupDto);
+  update(@CurrentUser() actor: User, @Param('id') id: string, @Body() updateGroupDto: UpdateGroupDto) {
+    return this.groupsService.update(actor, id, updateGroupDto);
   }
 
   @Delete(':id')
   @HasRoles(Roles.GROUP_DELETE)
   @ApiOperation({ summary: 'Delete a group' })
   @ApiResponse({ status: 200, description: 'Group deleted successfully' })
-  remove(@Param('id') id: string) {
-    return this.groupsService.delete(id);
+  remove(@CurrentUser() actor: User, @Param('id') id: string) {
+    return this.groupsService.delete(actor, id);
   }
 }
