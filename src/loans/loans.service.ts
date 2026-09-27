@@ -346,9 +346,14 @@ export class LoansService {
     });
   }
 
+  /**
+   * Every loan whose book is still out: active and overdue alike (overdue is
+   * set automatically once the due date passes). Earliest due first, so the
+   * overdue ones lead.
+   */
   async getActiveLoans(): Promise<Loan[]> {
     return await this.loansRepository.find({
-      where: { status: LoanStatus.ACTIVE },
+      where: [{ status: LoanStatus.ACTIVE }, { status: LoanStatus.OVERDUE }],
       relations: ['book', 'user'],
       order: { dueDate: 'ASC' },
     });

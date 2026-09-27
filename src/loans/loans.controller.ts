@@ -70,8 +70,8 @@ export class LoansController {
 
   @Get('active')
   @HasRoles(Roles.BOOK_LENDING_READ)
-  @ApiOperation({ summary: 'Get all active loans' })
-  @ApiResponse({ status: 200, description: 'List of active loans', type: [Loan] })
+  @ApiOperation({ summary: 'Get all loans whose book is still out (active and overdue), earliest due first' })
+  @ApiResponse({ status: 200, description: 'List of active and overdue loans', type: [Loan] })
   getActiveLoans() {
     return this.loansService.getActiveLoans();
   }

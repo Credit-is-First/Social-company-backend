@@ -574,3 +574,17 @@ describe('LoansService notifications', () => {
     expect(notifications.loanApproved).not.toHaveBeenCalled();
   });
 });
+
+describe('LoansService.getActiveLoans', () => {
+  it('lists every loan whose book is still out, overdue included, earliest due first', async () => {
+    const { service, loansRepository } = buildService(freshWorld());
+
+    await service.getActiveLoans();
+
+    expect(loansRepository.find).toHaveBeenCalledWith({
+      where: [{ status: LoanStatus.ACTIVE }, { status: LoanStatus.OVERDUE }],
+      relations: ['book', 'user'],
+      order: { dueDate: 'ASC' },
+    });
+  });
+});
