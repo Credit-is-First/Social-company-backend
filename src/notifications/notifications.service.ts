@@ -4,6 +4,7 @@ import { IsNull, Repository } from 'typeorm';
 import { Notification, NotificationType } from './entities/notification.entity';
 import { NotificationsGateway } from './notifications.gateway';
 import { Roles } from '../roles/roles.constants';
+import { toDateOnly } from '../common/date-only';
 
 /** Socket events the frontend listens for. */
 export const NOTIFICATION_EVENT = 'notification';
@@ -30,8 +31,7 @@ interface LoanRef {
   dueDate?: Date | string;
 }
 
-const formatDate = (value: Date | string | undefined): string =>
-  value ? new Date(value).toISOString().slice(0, 10) : '';
+const formatDate = (value: Date | string | undefined): string => (value ? toDateOnly(value) : '');
 
 /** Lengths of the notifications.title and .message columns. */
 const TITLE_MAX = 200;

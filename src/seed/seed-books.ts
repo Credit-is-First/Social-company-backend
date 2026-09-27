@@ -4,6 +4,7 @@ import { Book, BookStatus } from '../books/entities/book.entity';
 import { Repository } from 'typeorm';
 import * as fs from 'fs';
 import * as path from 'path';
+import { toDateOnly } from '../common/date-only';
 
 interface BookData {
   title: string;
@@ -51,7 +52,7 @@ export async function seedBooks(app: INestApplicationContext) {
         totalCopies: bookData.totalCopies,
         availableCopies: bookData.totalCopies,
         description: bookData.description || null,
-        publishedDate: bookData.publishedDate ? new Date(bookData.publishedDate) : null,
+        publishedDate: bookData.publishedDate ? toDateOnly(bookData.publishedDate) : null,
         isEbook: bookData.isEbook || false,
         status: BookStatus.WORKING,
       });

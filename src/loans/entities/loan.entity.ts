@@ -25,17 +25,18 @@ export class Loan {
   @Column({ type: 'varchar', length: 36 })
   userId: string;
 
-  @ApiProperty()
+  // A calendar date: TypeORM reads DATE columns as 'YYYY-MM-DD' strings (see common/date-only.ts).
+  @ApiProperty({ example: '2026-09-27' })
   @Column({ type: 'date' })
-  borrowDate: Date;
+  borrowDate: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: '2026-10-11' })
   @Column({ type: 'date' })
-  dueDate: Date;
+  dueDate: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: '2026-10-05', required: false })
   @Column({ type: 'date', nullable: true })
-  returnDate: Date;
+  returnDate: string | null;
 
   @ApiProperty({ enum: LoanStatus })
   @Column({

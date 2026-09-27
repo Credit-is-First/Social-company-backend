@@ -434,3 +434,17 @@ describe('BooksService submitter notifications', () => {
     expect(notifications.bookDeclined).not.toHaveBeenCalled();
   });
 });
+
+describe('BooksService published date', () => {
+  it('stores the published date exactly as given', async () => {
+    const { service, saved } = buildService();
+
+    await service.create(
+      { title: 'Dune', author: 'Herbert', isbn: '111', category: 'SciFi', totalCopies: 1, publishedDate: '2008-01-01' } as any,
+      undefined,
+      { id: 'u1', hasRole: () => true },
+    );
+
+    expect(saved[0].publishedDate).toBe('2008-01-01');
+  });
+});

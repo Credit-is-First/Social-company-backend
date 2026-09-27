@@ -62,7 +62,7 @@ export class User {
 
   @ApiProperty({ required: false, description: 'YYYY-MM-DD' })
   @Column({ type: 'date', nullable: true })
-  dateOfBirth: Date;
+  dateOfBirth: string | null;
 
   @ApiProperty({ required: false, enum: Gender })
   @Column({ type: 'enum', enum: Gender, nullable: true })

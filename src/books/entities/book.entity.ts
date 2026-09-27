@@ -46,8 +46,9 @@ export class Book {
   description: string;
 
   @ApiProperty()
+  // A calendar date: TypeORM reads DATE columns as 'YYYY-MM-DD' strings (see common/date-only.ts).
   @Column({ type: 'date', nullable: true })
-  publishedDate: Date;
+  publishedDate: string | null;
 
   @ApiProperty({ required: false })
   @Column({ type: 'boolean', default: false })

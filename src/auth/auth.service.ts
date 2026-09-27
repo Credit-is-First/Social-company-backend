@@ -14,6 +14,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { RefreshTokenService } from './refresh-token.service';
 import { storeProfilePhoto, deleteProfilePhoto } from '../users/profile-photo';
+import { toDateOnly } from '../common/date-only';
 
 /**
  * The internal shape of a freshly minted session.
@@ -255,8 +256,11 @@ export class AuthService {
     return await this.usersRepository.save(user);
   }
 
-  /** Format is checked by the DTO; this checks the date is actually plausible. */
-  private parseDateOfBirth(value: string): Date {
+  /**
+   * Format is checked by the DTO; this checks the date is actually plausible.
+   * Returns the calendar date itself, which is what the DATE column stores.
+   */
+  private parseDateOfBirth(value: string): string {
     const parsed = new Date(`${value}T00:00:00`);
     if (isNaN(parsed.getTime())) {
       throw new BadRequestException('Date of birth is not a valid date');
@@ -274,7 +278,7 @@ export class AuthService {
       throw new BadRequestException('Date of birth is not plausible');
     }
 
-    return parsed;
+    return toDateOnly(value);
   }
 
   /** Replaces the member's photo, removing any previous file from disk. */

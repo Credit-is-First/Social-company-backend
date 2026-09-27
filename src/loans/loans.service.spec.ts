@@ -3,6 +3,7 @@ import { LoansService } from './loans.service';
 import { Loan, LoanStatus } from './entities/loan.entity';
 import { Book, BookStatus } from '../books/entities/book.entity';
 import { User, Gender } from '../users/entities/user.entity';
+import { addDays, todayDateOnly } from '../common/date-only';
 
 /**
  * These tests pin the invariant the whole lending flow rests on:
@@ -246,7 +247,7 @@ describe('LoansService copy accounting', () => {
       const loan = await service.returnLoan('loan-1');
 
       expect(loan.status).toBe(LoanStatus.RETURNED);
-      expect(loan.returnDate).toBeInstanceOf(Date);
+      expect(loan.returnDate).toBe(todayDateOnly());
       expect(world.books[BOOK_ID].availableCopies).toBe(2);
     });
 
@@ -586,5 +587,39 @@ describe('LoansService.getActiveLoans', () => {
       relations: ['book', 'user'],
       order: { dueDate: 'ASC' },
     });
+  });
+});
+
+describe('LoansService calendar dates', () => {
+  // These used to go through new Date('YYYY-MM-DD'), which is UTC midnight;
+  // west of UTC the database then stored the day before.
+  it('stores the dates of a staff-issued loan exactly as given', async () => {
+    const world = freshWorld();
+    const { service } = buildService(world);
+
+    const loan = await service.create({ bookId: BOOK_ID, userId: USER_ID, borrowDate: '2026-09-02', dueDate: '2026-09-16' });
+
+    expect(loan.borrowDate).toBe('2026-09-02');
+    expect(loan.dueDate).toBe('2026-09-16');
+  });
+
+  it('dates a member request today, due in 14 days', async () => {
+    const { service } = buildService(freshWorld());
+
+    const loan = await service.createForUser(USER_ID, BOOK_ID);
+
+    expect(loan.borrowDate).toBe(todayDateOnly());
+    expect(loan.dueDate).toBe(addDays(todayDateOnly(), 14));
+  });
+
+  it('stores an edited return date exactly as given', async () => {
+    const world = freshWorld({ availableCopies: 1 });
+    world.loans['loan-1'] = makeLoan({ status: LoanStatus.ACTIVE });
+    const { service } = buildService(world);
+
+    const loan = await service.update('loan-1', { returnDate: '2026-09-20' });
+
+    expect(loan.returnDate).toBe('2026-09-20');
+    expect(loan.status).toBe(LoanStatus.RETURNED);
   });
 });

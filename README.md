@@ -80,6 +80,12 @@ src/
 - Secrets (`password`, `securityAnswer`) are stripped by `@Exclude()` on the
   entity plus the global serializer, which does not descend into plain wrapper
   objects — serialise the entity itself if you return `{ user: ... }`.
+- Calendar dates (loan borrow/due/return dates, `publishedDate`, `dateOfBirth`)
+  are `'YYYY-MM-DD'` strings end to end, never `Date`s: `new Date('2026-09-02')`
+  is UTC midnight, and TypeORM writes a `Date`'s local day, so west of UTC the
+  day before was stored. Use `src/common/date-only.ts` (`toDateOnly`,
+  `todayDateOnly`, `addDays`); the frontend's `src/utils/dates.ts` does the same
+  for display.
 - `availableCopies` changes only when a loan starts or stops holding a copy, in
   a transaction that locks the book row (and the loan row, for status changes).
 - Every path that moves roles — user role/group assignment, account creation,

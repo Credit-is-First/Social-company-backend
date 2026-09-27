@@ -4,6 +4,7 @@ import { Repository, LessThan, MoreThanOrEqual } from 'typeorm';
 import { Book, BookStatus } from '../books/entities/book.entity';
 import { User } from '../users/entities/user.entity';
 import { Loan, LoanStatus } from '../loans/entities/loan.entity';
+import { todayDateOnly } from '../common/date-only';
 
 /**
  * A loan as shown on the dashboard. Deliberately a flat summary rather than the
@@ -91,8 +92,13 @@ export class DashboardService {
       this.loansRepository.count({ where: { status: LoanStatus.ACTIVE } }),
       this.loansRepository.count({ where: { status: LoanStatus.PENDING } }),
       this.loansRepository.count({ where: { status: LoanStatus.RETURNED } }),
+      // Loans the reminder job has marked overdue, plus any active loan that
+      // has fallen due since its last run.
       this.loansRepository.count({
-        where: { status: LoanStatus.ACTIVE, dueDate: LessThan(startOfToday) },
+        where: [
+          { status: LoanStatus.OVERDUE },
+          { status: LoanStatus.ACTIVE, dueDate: LessThan(todayDateOnly()) },
+        ],
       }),
       this.booksRepository
         .createQueryBuilder('book')

@@ -7,6 +7,7 @@ import { Loan, LoanStatus } from './entities/loan.entity';
 import { Book, BookStatus } from '../books/entities/book.entity';
 import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { addDays, todayDateOnly, toDateOnly } from '../common/date-only';
 
 const DEFAULT_LOAN_DAYS = 14;
 
@@ -97,8 +98,10 @@ export class LoansService {
    * still decrementing, so approving it decremented a second time.)
    */
   async create(createLoanDto: CreateLoanDto): Promise<Loan> {
-    const borrowDate = new Date(createLoanDto.borrowDate);
-    const dueDate = new Date(createLoanDto.dueDate);
+    // Kept as calendar dates (see common/date-only.ts); as YYYY-MM-DD they
+    // also compare correctly as strings.
+    const borrowDate = toDateOnly(createLoanDto.borrowDate);
+    const dueDate = toDateOnly(createLoanDto.dueDate);
     if (dueDate < borrowDate) {
       throw new BadRequestException('Due date cannot be earlier than the borrow date');
     }
@@ -156,9 +159,8 @@ export class LoansService {
 
       await this.assertNoOpenLoan(manager, userId, bookId);
 
-      const borrowDate = new Date();
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + DEFAULT_LOAN_DAYS);
+      const borrowDate = todayDateOnly();
+      const dueDate = addDays(borrowDate, DEFAULT_LOAN_DAYS);
 
       const loan = manager.create(Loan, {
         bookId,
@@ -213,7 +215,7 @@ export class LoansService {
   }
 
   /** Marks an outstanding loan as returned and puts the copy back. */
-  async returnLoan(id: string, returnDate?: Date): Promise<Loan> {
+  async returnLoan(id: string, returnDate?: string): Promise<Loan> {
     return await this.connection.transaction(async manager => {
       const loan = await this.findOneWithin(manager, id);
 
@@ -224,7 +226,7 @@ export class LoansService {
       await this.adjustAvailableCopies(manager, loan.bookId, 1);
 
       loan.status = LoanStatus.RETURNED;
-      loan.returnDate = returnDate || new Date();
+      loan.returnDate = returnDate ? toDateOnly(returnDate) : todayDateOnly();
       return await manager.save(Loan, loan);
     });
   }
@@ -248,9 +250,9 @@ export class LoansService {
       }
 
       if (updateLoanDto.returnDate !== undefined) {
-        loan.returnDate = new Date(updateLoanDto.returnDate);
+        loan.returnDate = toDateOnly(updateLoanDto.returnDate);
       } else if (nextStatus === LoanStatus.RETURNED && !loan.returnDate) {
-        loan.returnDate = new Date();
+        loan.returnDate = todayDateOnly();
       }
 
       loan.status = nextStatus;

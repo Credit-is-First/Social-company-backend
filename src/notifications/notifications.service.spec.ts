@@ -90,7 +90,7 @@ describe('NotificationsService events', () => {
   it('tells the borrower an approved loan is due back', async () => {
     const { service, gateway } = buildService();
 
-    await service.loanApproved({ userId: 'u1', dueDate: new Date('2026-10-11T00:00:00Z') }, { title: 'Dune' });
+    await service.loanApproved({ userId: 'u1', dueDate: '2026-10-11' }, { title: 'Dune' });
 
     expect(gateway.sendToUser).toHaveBeenCalledWith(
       'u1',

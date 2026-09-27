@@ -8,6 +8,7 @@ import { Book, BookStatus } from './entities/book.entity';
 import { Loan } from '../loans/entities/loan.entity';
 import { UNREADABLE_CHAR, UTF8_BOM } from './csv-encoding';
 import { NotificationsService } from '../notifications/notifications.service';
+import { toDateOnly } from '../common/date-only';
 import { env } from '../config/env';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -117,7 +118,7 @@ export class BooksService {
       totalCopies,
       availableCopies,
       description: createBookDto.description,
-      publishedDate: createBookDto.publishedDate ? new Date(createBookDto.publishedDate) : undefined,
+      publishedDate: createBookDto.publishedDate ? toDateOnly(createBookDto.publishedDate) : undefined,
       isEbook: createBookDto.isEbook || false,
       status,
       submittedBy: (user && user.id) || null,
@@ -247,7 +248,7 @@ export class BooksService {
 
     // Convert publishedDate string to Date if provided
     if (updateBookDto.publishedDate !== undefined) {
-      book.publishedDate = updateBookDto.publishedDate ? new Date(updateBookDto.publishedDate) : null;
+      book.publishedDate = updateBookDto.publishedDate ? toDateOnly(updateBookDto.publishedDate) : null;
     }
 
     // Update other fields
@@ -398,11 +399,8 @@ export class BooksService {
       'Updated At',
     ];
 
-    // Format date for CSV
-    const formatDate = (date: Date | null | undefined): string => {
-      if (!date) return '';
-      return new Date(date).toISOString().split('T')[0];
-    };
+    // Calendar dates stay as written; timestamps become their local day.
+    const formatDate = (date: string | Date | null | undefined): string => (date ? toDateOnly(date) : '');
 
     // Build CSV rows
     const rows = books.map((book) => [
