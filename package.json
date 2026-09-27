@@ -23,6 +23,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "seed": "ts-node src/seed/index.ts",
     "seed:overdue": "ts-node src/seed/index.ts overdue",
+    "postinstall": "node scripts/fix-nest-cli-watch.js",
     "typeorm": "ts-node ./node_modules/typeorm/cli.js",
     "migration:generate": "npm run typeorm -- migration:generate -n",
     "migration:run": "npm run typeorm -- migration:run",

@@ -62,6 +62,17 @@ the normal staff path (so copies are taken) and leaves them un-reminded, so the 
 members who already have an open loan. The sample members' password is
 `SEED_MEMBER_PASSWORD` if set, otherwise a random one that is never shown.
 
+## Installed-package patch
+
+`postinstall` runs `scripts/fix-nest-cli-watch.js` (idempotent). Without it,
+`npm run start:dev` dies with "Cannot destructure property `paths` of 'undefined'"
+whenever `tsconfig.json` is re-read without anything changing, and the app it
+started keeps running on port 5001 with stale code. TypeScript's watch mode reuses
+the previous program with `createProgram(undefined, undefined, …)` there, and
+@nestjs/cli 7.6.0 passes those options unchecked to its tsconfig-paths hook. 7.6.0
+is the last 7.x, and 8+ needs a newer npm than Node 12.1.0 ships, so the patch makes
+the hook fall back to the reused program's options.
+
 ## Layout
 
 ```
