@@ -105,8 +105,8 @@ export class UsersController {
   @HasRoles(Roles.USER_BLOCK)
   @ApiOperation({ summary: 'Block or unblock a user' })
   @ApiResponse({ status: 200, description: 'User block status updated successfully', type: User })
-  blockUser(@Param('id') id: string, @Body() body: BlockUserDto) {
-    return this.usersService.blockUser(id, body.blocked);
+  blockUser(@CurrentUser() actor: User, @Param('id') id: string, @Body() body: BlockUserDto) {
+    return this.usersService.blockUser(actor, id, body.blocked);
   }
 
   @Patch(':id/reset-password')
@@ -146,8 +146,8 @@ export class UsersController {
   @HasRoles(Roles.USER_DELETE)
   @ApiOperation({ summary: 'Delete a user' })
   @ApiResponse({ status: 200, description: 'User deleted successfully' })
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(id);
+  remove(@CurrentUser() actor: User, @Param('id') id: string) {
+    return this.usersService.remove(actor, id);
   }
 }
 

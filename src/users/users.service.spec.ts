@@ -35,7 +35,9 @@ function buildService(world: { [id: string]: User }) {
   const usersRepository: any = {
     findOne: jest.fn(async (options: any) => world[options.where.id]),
     save: jest.fn(async (value: User) => value),
+    remove: jest.fn(async (value: User) => value),
   };
+  const loansRepository: any = { count: jest.fn(async () => 0) };
   const refreshTokensRepository: any = { update: jest.fn(async () => undefined) };
   const rolesService: any = {
     findOne: jest.fn(async (id: string) => catalogue.find(r => r.id === id)),
@@ -46,7 +48,7 @@ function buildService(world: { [id: string]: User }) {
 
   const service = new UsersService(
     usersRepository,
-    {} as any,
+    loansRepository,
     refreshTokensRepository,
     rolesService,
     groupsService,
@@ -224,5 +226,61 @@ describe('UsersService revocation, self-reset and Super Admin transfer', () => {
     const { service } = buildService({ super: holder, target });
 
     await expect(service.transferSuperAdmin(holder, 'target')).rejects.toThrow(/blocked/);
+  });
+});
+
+describe('UsersService block and delete', () => {
+  // The admin lacks user:delete, so an account holding it is above them.
+  const admin = user('admin', [group('Admin', ADMIN_ROLES)]);
+  const superAdmin = user('super', [group('Super Admin', [...ADMIN_ROLES, Roles.USER_DELETE])]);
+  const higher = () => user('higher', [group('Deleters', [Roles.USER_DELETE])]);
+  const member = () => user('member', [group('User', [Roles.BOOK_READ])]);
+
+  it('refuses to block an account holding roles the caller lacks', async () => {
+    const target = higher();
+    const { service, usersRepository } = buildService({ higher: target });
+
+    await expect(service.blockUser(admin, 'higher', true)).rejects.toThrow(
+      'You cannot block an account with more privileges than your own',
+    );
+    expect(usersRepository.save).not.toHaveBeenCalled();
+    expect(target.blocked).toBeUndefined();
+  });
+
+  it('refuses to unblock one too', async () => {
+    const target = Object.assign(higher(), { blocked: true });
+    const { service } = buildService({ higher: target });
+
+    await expect(service.blockUser(admin, 'higher', false)).rejects.toThrow('You cannot unblock');
+    expect(target.blocked).toBe(true);
+  });
+
+  it('refuses to delete one', async () => {
+    const { service, usersRepository } = buildService({ higher: higher() });
+
+    await expect(service.remove(admin, 'higher')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(usersRepository.remove).not.toHaveBeenCalled();
+  });
+
+  it('blocks, unblocks and deletes a less privileged account', async () => {
+    const target = member();
+    const { service, usersRepository } = buildService({ member: target });
+
+    await service.blockUser(admin, 'member', true);
+    expect(target.blocked).toBe(true);
+    await service.blockUser(admin, 'member', false);
+    expect(target.blocked).toBe(false);
+    await service.remove(admin, 'member');
+    expect(usersRepository.remove).toHaveBeenCalledWith(target);
+  });
+
+  it('lets the super admin block and delete anyone else', async () => {
+    const target = higher();
+    const { service, usersRepository } = buildService({ higher: target });
+
+    await service.blockUser(superAdmin, 'higher', true);
+    expect(target.blocked).toBe(true);
+    await service.remove(superAdmin, 'higher');
+    expect(usersRepository.remove).toHaveBeenCalledWith(target);
   });
 });

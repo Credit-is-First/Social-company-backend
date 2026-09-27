@@ -37,14 +37,14 @@ export function assertCanRevoke(actor: User, roleNames: string[]): void {
 }
 
 /**
- * Taking over an account means taking over its roles, so acting as someone
- * (resetting their password) is only allowed when the caller already holds
- * everything they do. This is what stops an Admin resetting the Super Admin's
- * password.
+ * Taking over an account means taking over its roles, and blocking or deleting
+ * it takes its access away; either is only allowed when the caller already
+ * holds everything the account does. This is what stops an Admin resetting the
+ * Super Admin's password, or locking out an account above their own.
  */
-export function assertCanActAs(actor: User, target: User): void {
+export function assertCanActAs(actor: User, target: User, action = 'reset the password of'): void {
   if (missing(actor, target.getAllRoleNames()).length > 0) {
-    throw new ForbiddenException('You cannot reset the password of an account with more privileges than your own');
+    throw new ForbiddenException(`You cannot ${action} an account with more privileges than your own`);
   }
 }
 

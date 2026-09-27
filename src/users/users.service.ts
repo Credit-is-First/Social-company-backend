@@ -194,10 +194,11 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(actor: User, id: string): Promise<void> {
     const user = await this.findOne(id);
 
     this.assertNotLastSuperAdmin(user, 'delete');
+    assertCanActAs(actor, user, 'delete');
 
     // Loans hold a foreign key to the user; removing the row underneath them
     // used to surface as an unhandled driver error.
@@ -211,12 +212,15 @@ export class UsersService {
     await this.usersRepository.remove(user);
   }
 
-  async blockUser(userId: string, blocked: boolean): Promise<User> {
+  async blockUser(actor: User, userId: string, blocked: boolean): Promise<User> {
     const user = await this.findOne(userId);
 
     if (blocked) {
       this.assertNotLastSuperAdmin(user, 'block');
     }
+    // Unblocking is held to the same rule: managing an account's access at all
+    // is reserved for those who hold everything it does.
+    assertCanActAs(actor, user, blocked ? 'block' : 'unblock');
 
     user.blocked = blocked;
     return await this.usersRepository.save(user);

@@ -55,7 +55,7 @@ without it.
 npm run start:dev          # watch mode on http://localhost:5001, Swagger at /api (dev only)
 npm run build              # compile to dist/
 npm run start:prod         # run dist/main
-npm test                   # 203 unit tests in 12 suites — no database needed
+npm test                   # 209 unit tests in 12 suites — no database needed
 npm run test:e2e           # end-to-end — needs MySQL; uses its own E2E_DB_NAME schema
 npm run migration:generate -- Name   # generate against an EMPTY database
 npm run migration:run
@@ -125,11 +125,11 @@ Migrations, in order: `InitialSchema`, `AddProfileFields`, `AddNotifications`,
   a transaction that locks the book row (and the loan row, for status changes).
 - Every path that moves roles — user role/group assignment, account creation,
   and group create/update/delete — goes through `src/roles/privilege.ts`:
-  nobody can grant or remove a role they do not hold, or reset the password of
-  an account holding one. New code that changes roles must call it too. The
+  nobody can grant or remove a role they do not hold, or reset the password of,
+  block or delete an account holding one. New code that changes roles must call it too. The
   Super Admin group's roles are fixed; the role changes hands only through
-  `POST /users/:id/transfer-super-admin`. (Blocking and deleting users do not
-  call it yet — see the project README's Known gaps.)
+  `POST /users/:id/transfer-super-admin`. Blocking, unblocking and deleting a user
+  use the same rule (`assertCanActAs`): you must hold every role the account holds.
 - Notifications are sent through `NotificationsService` only after the change
   that caused them has been saved (for loans, after the transaction commits), and
   never throw: a delivery failure is logged, not reported as a failed action.
