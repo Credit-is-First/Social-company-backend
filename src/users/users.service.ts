@@ -13,6 +13,7 @@ import { RolesService } from '../roles/roles.service';
 import { GroupsService } from '../groups/groups.service';
 import { SUPER_ADMIN_GROUP, DEFAULT_MEMBER_GROUP, Roles } from '../roles/roles.constants';
 import { assertCanGrant, assertCanRevoke, assertCanActAs, diffRoleNames } from '../roles/privilege';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -27,6 +28,7 @@ export class UsersService {
     private refreshTokensRepository: Repository<RefreshToken>,
     private rolesService: RolesService,
     private groupsService: GroupsService,
+    private notifications: NotificationsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -210,6 +212,7 @@ export class UsersService {
     }
 
     await this.usersRepository.remove(user);
+    this.notifications.disconnectUser(id, 'Account deleted');
   }
 
   async blockUser(actor: User, userId: string, blocked: boolean): Promise<User> {
@@ -223,7 +226,11 @@ export class UsersService {
     assertCanActAs(actor, user, blocked ? 'block' : 'unblock');
 
     user.blocked = blocked;
-    return await this.usersRepository.save(user);
+    const saved = await this.usersRepository.save(user);
+    if (blocked) {
+      this.notifications.disconnectUser(userId, 'Account blocked');
+    }
+    return saved;
   }
 
   /**

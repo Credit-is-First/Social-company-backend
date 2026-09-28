@@ -19,6 +19,7 @@ function fakeSocket(id = 'socket-1') {
     leave: jest.fn(),
     emit: jest.fn(),
     disconnect: jest.fn(),
+    disconnected: false,
   } as any;
 }
 
@@ -124,5 +125,79 @@ describe('isAllowedOrigin', () => {
     expect(isAllowedOrigin('http://localhost:5000')).toBe(true);
     expect(isAllowedOrigin(undefined)).toBe(true);
     expect(isAllowedOrigin('https://evil.example')).toBe(false);
+  });
+});
+
+describe('NotificationsGateway session lifetime', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('drops a socket when the token it signed in with expires', async () => {
+    const { gateway, token } = buildGateway(USERS);
+    const socket = fakeSocket();
+    gateway.handleConnection(socket);
+    await gateway.authenticate(socket, { token: token('u1', { expiresIn: 60 }) });
+
+    jest.advanceTimersByTime(55 * 1000);
+    expect(socket.disconnect).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(10 * 1000);
+
+    expect(socket.emit).toHaveBeenCalledWith('unauthorized', { message: 'Session expired' });
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it('extends the session when the socket signs in again with a fresh token', async () => {
+    const { gateway, token } = buildGateway(USERS);
+    const socket = fakeSocket();
+    await gateway.authenticate(socket, { token: token('u1', { expiresIn: 60 }) });
+    jest.advanceTimersByTime(50 * 1000);
+    await gateway.authenticate(socket, { token: token('u1', { expiresIn: 900 }) });
+
+    jest.advanceTimersByTime(60 * 1000);
+
+    expect(socket.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('forgets the timer when the socket disconnects first', async () => {
+    const { gateway, token } = buildGateway(USERS);
+    const socket = fakeSocket();
+    await gateway.authenticate(socket, { token: token('u1', { expiresIn: 60 }) });
+    gateway.handleDisconnect(socket);
+
+    jest.advanceTimersByTime(120 * 1000);
+
+    expect(socket.emit).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a socket that went away while it was being checked', async () => {
+    const { gateway, token } = buildGateway(USERS);
+    const socket = fakeSocket();
+    gateway.handleConnection(socket);
+    const pending = gateway.authenticate(socket, { token: token('u1') });
+    socket.disconnected = true;
+    gateway.handleDisconnect(socket);
+
+    await expect(pending).resolves.toEqual({ ok: false, message: 'Disconnected' });
+    expect(socket.join).not.toHaveBeenCalled();
+    gateway.disconnectUser('u1', 'Account blocked');
+    expect(socket.emit).not.toHaveBeenCalled();
+  });
+
+  it('signs out every socket of one user, and only theirs', async () => {
+    const { gateway, token } = buildGateway(USERS);
+    const tab1 = fakeSocket('tab-1');
+    const tab2 = fakeSocket('tab-2');
+    const other = fakeSocket('other');
+    await gateway.authenticate(tab1, { token: token('u1') });
+    await gateway.authenticate(tab2, { token: token('u1') });
+    await gateway.authenticate(other, { token: token('u2') });
+
+    gateway.disconnectUser('u1', 'Account blocked');
+
+    [tab1, tab2].forEach(s => {
+      expect(s.emit).toHaveBeenCalledWith('unauthorized', { message: 'Account blocked' });
+      expect(s.disconnect).toHaveBeenCalledWith(true);
+    });
+    expect(other.disconnect).not.toHaveBeenCalled();
   });
 });

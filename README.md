@@ -55,7 +55,7 @@ without it.
 npm run start:dev          # watch mode on http://localhost:5001, Swagger at /api (dev only)
 npm run build              # compile to dist/
 npm run start:prod         # run dist/main
-npm test                   # 209 unit tests in 12 suites — no database needed
+npm test                   # 218 unit tests in 12 suites — no database needed
 npm run test:e2e           # end-to-end — needs MySQL; uses its own E2E_DB_NAME schema
 npm run migration:generate -- Name   # generate against an EMPTY database
 npm run migration:run
@@ -134,7 +134,9 @@ Migrations, in order: `InitialSchema`, `AddProfileFields`, `AddNotifications`,
   that caused them has been saved (for loans, after the transaction commits), and
   never throw: a delivery failure is logged, not reported as a failed action.
   Sockets authenticate with an `authenticate` message carrying the access token,
-  not a query-string token, and receive only their own user's room.
+  not a query-string token, and receive only their own user's room. A signed-in
+  socket is dropped (`unauthorized`) when that token expires, and at once when
+  the account is blocked or deleted (`NotificationsService.disconnectUser`).
 - `LoanRemindersService` runs on a timer (every `LOAN_REMINDER_INTERVAL_MINUTES`,
   default 60, and 15 s after startup; 0 turns it off). It marks past-due active
   loans `overdue` and sends due-soon and overdue reminders. Dates are compared with

@@ -254,6 +254,19 @@ export class NotificationsService {
     return rows.map(row => row.id);
   }
 
+  /**
+   * Signs a user's notification sockets out at once, for an account that has
+   * just been blocked or deleted (otherwise they would last until the access
+   * token expires).
+   */
+  disconnectUser(userId: string, reason: string): void {
+    try {
+      this.gateway.disconnectUser(userId, reason);
+    } catch (error) {
+      this.logger.error(`Could not disconnect notification sockets: ${error && error.message}`);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Reading
   // ---------------------------------------------------------------------------

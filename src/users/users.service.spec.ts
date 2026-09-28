@@ -38,6 +38,7 @@ function buildService(world: { [id: string]: User }) {
     remove: jest.fn(async (value: User) => value),
   };
   const loansRepository: any = { count: jest.fn(async () => 0) };
+  const notifications: any = { disconnectUser: jest.fn() };
   const refreshTokensRepository: any = { update: jest.fn(async () => undefined) };
   const rolesService: any = {
     findOne: jest.fn(async (id: string) => catalogue.find(r => r.id === id)),
@@ -52,8 +53,9 @@ function buildService(world: { [id: string]: User }) {
     refreshTokensRepository,
     rolesService,
     groupsService,
+    notifications,
   );
-  return { service, refreshTokensRepository, usersRepository };
+  return { service, refreshTokensRepository, usersRepository, notifications };
 }
 
 describe('UsersService privilege containment', () => {
@@ -282,5 +284,42 @@ describe('UsersService block and delete', () => {
     expect(target.blocked).toBe(true);
     await service.remove(superAdmin, 'higher');
     expect(usersRepository.remove).toHaveBeenCalledWith(target);
+  });
+});
+
+describe('UsersService sign-out of notification sockets', () => {
+  const admin = user('admin', [group('Admin', ADMIN_ROLES)]);
+  const member = () => user('member', [group('User', [Roles.BOOK_READ])]);
+
+  it('signs the sockets of a blocked user out at once', async () => {
+    const { service, notifications } = buildService({ member: member() });
+
+    await service.blockUser(admin, 'member', true);
+
+    expect(notifications.disconnectUser).toHaveBeenCalledWith('member', 'Account blocked');
+  });
+
+  it('leaves them alone when unblocking', async () => {
+    const { service, notifications } = buildService({ member: Object.assign(member(), { blocked: true }) });
+
+    await service.blockUser(admin, 'member', false);
+
+    expect(notifications.disconnectUser).not.toHaveBeenCalled();
+  });
+
+  it('signs the sockets of a deleted user out', async () => {
+    const { service, notifications } = buildService({ member: member() });
+
+    await service.remove(admin, 'member');
+
+    expect(notifications.disconnectUser).toHaveBeenCalledWith('member', 'Account deleted');
+  });
+
+  it('does not sign anyone out when the block is refused', async () => {
+    const higher = user('higher', [group('Deleters', [Roles.USER_DELETE])]);
+    const { service, notifications } = buildService({ higher });
+
+    await expect(service.blockUser(admin, 'higher', true)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(notifications.disconnectUser).not.toHaveBeenCalled();
   });
 });

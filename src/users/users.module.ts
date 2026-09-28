@@ -7,9 +7,10 @@ import { Loan } from '../loans/entities/loan.entity';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { RolesModule } from '../roles/roles.module';
 import { GroupsModule } from '../groups/groups.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Loan, RefreshToken]), RolesModule, GroupsModule],
+  imports: [TypeOrmModule.forFeature([User, Loan, RefreshToken]), RolesModule, GroupsModule, NotificationsModule],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],
